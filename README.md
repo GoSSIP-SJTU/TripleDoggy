@@ -5,7 +5,7 @@
 ### 简介
 [Clang static analyzer](https://clang-analyzer.llvm.org)是一个基于clang的c/c++/object-c源代码检测框架。它首先对源文件进行预处理然后使用符号执行遍历整个源文件。开发者们可以开发自己的插件通过hook的方式在符号执行过程中与框架进行交互。该框架提供了大量的api接口，开发者可以利用这些接口得到大量有用的信息来帮助发现潜在问题。 
 
-目前我们实现的有三个chekcer，包括:
+目前我们实现的有三个chekcer，包括:
 1. NewDereferenceChecker，用于检测空指针解引用漏洞
 2. DoubleFreeChecker，用于检测doublefree,use-after-free,memroy leak漏洞
 3. OverflowChecker，用于检测整形溢出漏洞
@@ -169,7 +169,7 @@ else
 1. NPL identification of memory allocate function.
 
 
-## DoubleFreeChecker
+## DoubleFreeChecker
 
 ## 中文
 Double free漏洞的成因顾名思义，就是指一块内存被重复的释放两次以上。Clang static analyzer中的自己实现的检测算法为通过hook对应的内存分配释放函数来记录一块内存的状态，当发现有释放同一块内存的操作时，报告漏洞。然而在实际使用的源文件中，情况要比描述的复杂，主要由以下两个情况导致：
