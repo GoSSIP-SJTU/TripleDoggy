@@ -4,31 +4,56 @@
 #include <fstream>
 #include <vector>
 #include <iostream>
-
-#include "log.h"
+#include <stdlib.h>
 using namespace clang;
 using namespace ento;
 using namespace loc;
-
-
-#define MEM_ALLOC_CONFIG_FILENAME "/home/loccs/memallocfuncs.txt"
+#define MEM_ALLOC_CONFIG_FILENAME "/home/loccs/memmallocfuncs.txt"
 #define MEM_FREE_CONFIG_FILENAME "/home/loccs/memfreefuncs.txt"
 #define MEM_REALLOC_CONFIG_FILENAME "/home/loccs/memreallocfuncs.txt"
 #define MEM_LOGFILENAME "/home/loccs/log.txt"
-/*
-MemFuncsUtility is used to check whether a function is memory allocate function
-or a memory free function since most librarys implement their own memory functions
-*/
+struct WJQ_FUNC
+{
+  std::string function_name;
+  int sizearg_index;
+  int pointerarg_index;
+};
+
+void super_split(const std::string& s, const std::string& c,std::vector<std::string> &v)
+{
+    std::string::size_type pos1, pos2;
+    size_t len = s.length();
+    pos2 = s.find(c);
+    pos1 = 0;
+    while(std::string::npos != pos2)
+    {
+        v.emplace_back(s.substr(pos1, pos2-pos1));
+ 
+        pos1 = pos2 + c.size();
+        pos2 = s.find(c, pos1);
+    }
+    if(pos1 != len)
+        v.emplace_back(s.substr(pos1));
+}
+void parse_func_configfile(std::vector<WJQ_FUNC> & list,std::string line)
+{
+  WJQ_FUNC tmp;
+  std::vector<std::string> t ;
+  super_split(line," ",t);
+  tmp.function_name = t[0];
+  tmp.sizearg_index = atoi(t[1].c_str());
+  tmp.pointerarg_index = atoi(t[2].c_str());
+  list.push_back(tmp);
+}
 class MemFuncsUtility
 {
   private:
   std::fstream mem_alloc_file;
   std::fstream mem_free_file;
   std::fstream mem_realloc_file;
-  std::vector<std::string> memallocfuns;
-  std::vector<std::string> memfreefuns;
-  std::vector<std::string> memreallocfuns;
-  Log *log;
+  std::vector<WJQ_FUNC> memallocfuncs;
+  std::vector<WJQ_FUNC> memfreefuncs;
+  std::vector<WJQ_FUNC> memreallocfuncs;
   std::string getFunctionNameFromCall(const CallEvent &event)
   {
     const Decl * decl = event.getDecl();
@@ -40,140 +65,95 @@ class MemFuncsUtility
     std::string func_name = func_decl->getQualifiedNameAsString();
     return func_name;
   }
-  /*
-  check if the function is in the set that represent the special treat functions
-  */
-  bool isKnownMallocFunction(std::string &func_name)
-  {
-    // just compare the function name
-    for(std::string name:memallocfuns)
-    {
-      if(name == func_name)
-          return true;
-    }
-    return false;
-  }
   public:
-  ~MemFuncsUtility()
-  {
-    delete log;
-  }
-  /*
-  read specified function from configuration file.
-  */
   MemFuncsUtility()
   {
-    log = new Log(MEM_LOGFILENAME);
     mem_alloc_file.open(MEM_ALLOC_CONFIG_FILENAME);
     std::string readline;
-    /*
-    each line represent a memoryallocate function name
-    */
-    while (getline(mem_alloc_file, readline))  
+    while (getline(mem_alloc_file, readline)) //each line represena a memoryallocate function name 
     {
-      memallocfuns.push_back(readline);
+      parse_func_configfile(memallocfuncs,readline);
     }
     mem_alloc_file.close();
     mem_free_file.open(MEM_FREE_CONFIG_FILENAME);
-    while (getline(mem_free_file, readline)) 
+    while (getline(mem_free_file, readline)) //each line represena a memoryallocate function name 
     {
-      memfreefuns.push_back(readline);
+      parse_func_configfile(memfreefuncs,readline);
     }
     mem_free_file.close();
     mem_realloc_file.open(MEM_REALLOC_CONFIG_FILENAME);
-    while (getline(mem_realloc_file, readline)) 
+    while (getline(mem_realloc_file, readline)) //each line represena a memoryallocate function name 
     {
-      memreallocfuns.push_back(readline);
+      parse_func_configfile(memreallocfuncs,readline);
     }
     mem_realloc_file.close();
   }
-  bool isFreeFunction(const CallEvent &event)
+  WJQ_FUNC* isFreeFunction(const CallEvent &event)
   {
+    const Decl * decl = event.getDecl();
+    const FunctionDecl * fdecl = decl->getAsFunction();
+    ArrayRef< ParmVarDecl * > argdecls = fdecl->parameters();
     std::string func_name = getFunctionNameFromCall(event);
-    // just compare the function name
-    for(std::string name:memfreefuns)
+    for(WJQ_FUNC func : memfreefuncs)
     {
-      if(name == func_name)
+      if(func.function_name == func_name)
       {
-        return true;
+          int num_args = argdecls.size ();
+          if(func.pointerarg_index < num_args )
+          {
+            if (argdecls[func.pointerarg_index]->getOriginalType().getTypePtr()->isAnyPointerType())
+              return new WJQ_FUNC(func);
+          }
+          break;
       } 
     }
-    return false;
+    return nullptr;
   }
-  bool isReallocFunction(const CallEvent &event)
+    WJQ_FUNC* isAllocFunction(const CallEvent &event)
   {
-    
-      std::string func_name = getFunctionNameFromCall(event);
-      for(std::string name:memreallocfuns)
-      {
-        if (func_name == name)
-        {
-          return true;
-        }
-      }
-      return false;
-  }
-  bool isSpecialFunction(const CallEvent &event)
-  {
+    const Decl * decl = event.getDecl();
+    const FunctionDecl * fdecl = decl->getAsFunction();
+    if (!fdecl ->getReturnType().getTypePtr()->isAnyPointerType())
+      return nullptr;
+    ArrayRef< ParmVarDecl * > argdecls = fdecl->parameters();
     std::string func_name = getFunctionNameFromCall(event);
-    if (func_name == "wjq")
+    // just compare the function name
+    for(WJQ_FUNC func : memallocfuncs)
     {
-      return true;
-    }
-    return false;
-  }
-
-/*
-  Here we depend on several heuristics to determine whether a function is a memory 
-  allocate function or not:
-  1. the return type must be a pointer type but can not be a function pointer
-  2. the return type must be void pointer or a structure or class pointer
-  3. the number of args must be less than MAX_ALLOCFUNC_NUMARGS.
-  4. each arg type of the function must be integer.
-  In addtion, some known memory allocate funtion must be specifically treated. for
-  instance, malloc,calloc.
-*/
-//now we define the max number of args 3, an empirical result. 
-//maybe changed in future work.
-#define MAX_ALLOCFUNC_NUMARGS 3
-bool isMallocFunction(const CallEvent &event)
-{
-  /*
-    first we checker if the function is a known memory allocate funtion.
-    if so, return true.
-  */
-  std::string func_name = getFunctionNameFromCall(event);
-  return isKnownMallocFunction(func_name);
-  if(isKnownMallocFunction(func_name))
-  {
-    return true;
-  }
-    
-  const Type *rettype =  event.getResultType().getTypePtr();
-  if(!rettype)
-    return false;
-  if(!rettype->isAnyPointerType()||
-     rettype->isFunctionPointerType())
-    return false;
-  if(!rettype->getPointeeOrArrayElementType()->isStructureOrClassType() &&
-     !rettype->isVoidPointerType()
-    )
-    return false;
-  unsigned int num_args = event.getNumArgs();
-  if(num_args > MAX_ALLOCFUNC_NUMARGS)
-    return false;
-  //iterate each parameter to see if type is integer type.
-  for(CallEvent::param_type_iterator it = event.param_type_begin();
-      it != event.param_type_end();
-      it++)
+      if(func.function_name == func_name)
       {
-        if(!(*it).getTypePtr()->isIntegerType())
-          return false;
-      }
-    //llvm::outs() << func_name << "\n";
-    return true;
+          int num_args = argdecls.size ();
+          if(func.sizearg_index < num_args )
+          {
+            if (argdecls[func.sizearg_index]->getOriginalType().getTypePtr()->isIntegerType())
+              return new WJQ_FUNC(func);
+          }
+          break;
+      } 
+    }
+    return nullptr;
   }
-  
-
+    WJQ_FUNC* isReallocFunction(const CallEvent &event)
+  {
+    const Decl * decl = event.getDecl();
+    const FunctionDecl * fdecl = decl->getAsFunction();
+    ArrayRef< ParmVarDecl * > argdecls = fdecl->parameters();
+    std::string func_name = getFunctionNameFromCall(event);
+    // just compare the function name
+    for(WJQ_FUNC func : memreallocfuncs)
+    {
+      if(func.function_name == func_name)
+      {
+          int num_args = argdecls.size ();
+          if(func.sizearg_index < num_args && func.pointerarg_index < num_args)
+          {
+            if ((argdecls[func.sizearg_index]->getOriginalType()->isIntegerType()) &&
+               (argdecls[func.pointerarg_index]->getOriginalType().getTypePtr()->isAnyPointerType()))
+              return new WJQ_FUNC(func);
+          }
+          break;
+      } 
+    }
+    return nullptr;
+  }
 };
-

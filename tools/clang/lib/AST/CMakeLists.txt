@@ -10,6 +10,7 @@ add_clang_library(clangAST
   ASTDiagnostic.cpp
   ASTDumper.cpp
   ASTImporter.cpp
+  ASTImporterLookupTable.cpp
   ASTStructuralEquivalence.cpp
   ASTTypeTraits.cpp
   AttrImpl.cpp
@@ -20,6 +21,7 @@ add_clang_library(clangAST
   CommentLexer.cpp
   CommentParser.cpp
   CommentSema.cpp
+  ComparisonCategories.cpp
   DataCollection.cpp
   Decl.cpp
   DeclarationName.cpp

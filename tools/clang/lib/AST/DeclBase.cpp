@@ -34,7 +34,6 @@
 #include "clang/Basic/PartialDiagnostic.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/TargetInfo.h"
-#include "clang/Basic/VersionTuple.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/SmallVector.h"
@@ -42,6 +41,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/VersionTuple.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -139,7 +139,7 @@ void Decl::setInvalidDecl(bool Invalid) {
   if (!isa<ParmVarDecl>(this)) {
     // Defensive maneuver for ill-formed code: we're likely not to make it to
     // a point where we set the access specifier, so default it to "public"
-    // to avoid triggering asserts elsewhere in the front end. 
+    // to avoid triggering asserts elsewhere in the front end.
     setAccess(AS_public);
   }
 
@@ -211,7 +211,7 @@ bool Decl::isTemplateParameterPack() const {
 bool Decl::isParameterPack() const {
   if (const auto *Parm = dyn_cast<ParmVarDecl>(this))
     return Parm->isParameterPack();
-  
+
   return isTemplateParameterPack();
 }
 
@@ -253,7 +253,7 @@ bool Decl::isTemplated() const {
 
 const DeclContext *Decl::getParentFunctionOrMethod() const {
   for (const DeclContext *DC = getDeclContext();
-       DC && !DC->isTranslationUnit() && !DC->isNamespace(); 
+       DC && !DC->isTranslationUnit() && !DC->isNamespace();
        DC = DC->getParent())
     if (DC->isFunctionOrMethod())
       return DC;
@@ -419,7 +419,7 @@ void Decl::markUsed(ASTContext &C) {
   setIsUsed();
 }
 
-bool Decl::isReferenced() const { 
+bool Decl::isReferenced() const {
   if (Referenced)
     return true;
 
@@ -428,7 +428,7 @@ bool Decl::isReferenced() const {
     if (I->Referenced)
       return true;
 
-  return false; 
+  return false;
 }
 
 bool Decl::isExported() const {
@@ -493,7 +493,7 @@ static StringRef getRealizedPlatform(const AvailabilityAttr *A,
   return RealizedPlatform;
 }
 
-/// \brief Determine the availability of the given declaration based on
+/// Determine the availability of the given declaration based on
 /// the target platform.
 ///
 /// When it returns an availability result other than \c AR_Available,
@@ -530,13 +530,13 @@ static AvailabilityResult CheckAvailability(ASTContext &Context,
     HintMessage = " - ";
     HintMessage += A->getMessage();
   }
-  
+
   // Make sure that this declaration has not been marked 'unavailable'.
   if (A->getUnavailable()) {
     if (Message) {
       Message->clear();
       llvm::raw_string_ostream Out(*Message);
-      Out << "not available on " << PrettyPlatformName 
+      Out << "not available on " << PrettyPlatformName
           << HintMessage;
     }
 
@@ -544,14 +544,13 @@ static AvailabilityResult CheckAvailability(ASTContext &Context,
   }
 
   // Make sure that this declaration has already been introduced.
-  if (!A->getIntroduced().empty() && 
+  if (!A->getIntroduced().empty() &&
       EnclosingVersion < A->getIntroduced()) {
     if (Message) {
       Message->clear();
       llvm::raw_string_ostream Out(*Message);
       VersionTuple VTI(A->getIntroduced());
-      VTI.UseDotAsSeparator();
-      Out << "introduced in " << PrettyPlatformName << ' ' 
+      Out << "introduced in " << PrettyPlatformName << ' '
           << VTI << HintMessage;
     }
 
@@ -564,11 +563,10 @@ static AvailabilityResult CheckAvailability(ASTContext &Context,
       Message->clear();
       llvm::raw_string_ostream Out(*Message);
       VersionTuple VTO(A->getObsoleted());
-      VTO.UseDotAsSeparator();
-      Out << "obsoleted in " << PrettyPlatformName << ' ' 
+      Out << "obsoleted in " << PrettyPlatformName << ' '
           << VTO << HintMessage;
     }
-    
+
     return AR_Unavailable;
   }
 
@@ -578,11 +576,10 @@ static AvailabilityResult CheckAvailability(ASTContext &Context,
       Message->clear();
       llvm::raw_string_ostream Out(*Message);
       VersionTuple VTD(A->getDeprecated());
-      VTD.UseDotAsSeparator();
       Out << "first deprecated in " << PrettyPlatformName << ' '
           << VTD << HintMessage;
     }
-    
+
     return AR_Deprecated;
   }
 
@@ -1003,7 +1000,7 @@ bool DeclContext::classof(const Decl *D) {
 
 DeclContext::~DeclContext() = default;
 
-/// \brief Find the parent context of this context that will be
+/// Find the parent context of this context that will be
 /// used for unqualified name lookup.
 ///
 /// Generally, the parent lookup context is the semantic context. However, for
@@ -1015,7 +1012,7 @@ DeclContext *DeclContext::getLookupParent() {
     if (getParent()->getRedeclContext()->isFileContext() &&
         getLexicalParent()->getRedeclContext()->isRecord())
       return getLexicalParent();
-  
+
   return getParent();
 }
 
@@ -1050,11 +1047,11 @@ bool DeclContext::isDependentContext() const {
   if (const auto *Record = dyn_cast<CXXRecordDecl>(this)) {
     if (Record->getDescribedClassTemplate())
       return true;
-    
+
     if (Record->isDependentLambda())
       return true;
   }
-  
+
   if (const auto *Function = dyn_cast<FunctionDecl>(this)) {
     if (Function->getDescribedFunctionTemplate())
       return true;
@@ -1143,12 +1140,12 @@ DeclContext *DeclContext::getPrimaryContext() {
     if (auto *Def = cast<ObjCInterfaceDecl>(this)->getDefinition())
       return Def;
     return this;
-      
+
   case Decl::ObjCProtocol:
     if (auto *Def = cast<ObjCProtocolDecl>(this)->getDefinition())
       return Def;
     return this;
-      
+
   case Decl::ObjCCategory:
     return this;
 
@@ -1183,20 +1180,20 @@ DeclContext *DeclContext::getPrimaryContext() {
   }
 }
 
-void 
+void
 DeclContext::collectAllContexts(SmallVectorImpl<DeclContext *> &Contexts){
   Contexts.clear();
-  
+
   if (DeclKind != Decl::Namespace) {
     Contexts.push_back(this);
     return;
   }
-  
+
   auto *Self = static_cast<NamespaceDecl *>(this);
   for (NamespaceDecl *N = Self->getMostRecentDecl(); N;
        N = N->getPreviousDecl())
     Contexts.push_back(N);
-  
+
   std::reverse(Contexts.begin(), Contexts.end());
 }
 
@@ -1221,7 +1218,7 @@ DeclContext::BuildDeclChain(ArrayRef<Decl *> Decls,
   return std::make_pair(FirstNewDecl, PrevDecl);
 }
 
-/// \brief We have just acquired external visible storage, and we already have
+/// We have just acquired external visible storage, and we already have
 /// built a lookup map. For every name in the map, pull in the new names from
 /// the external storage.
 void DeclContext::reconcileExternalVisibleStorage() const {
@@ -1232,7 +1229,7 @@ void DeclContext::reconcileExternalVisibleStorage() const {
     Lookup.second.setHasExternalDecls();
 }
 
-/// \brief Load the declarations within this lexical storage from an
+/// Load the declarations within this lexical storage from an
 /// external source.
 /// \return \c true if any declarations were added.
 bool
@@ -1256,7 +1253,7 @@ DeclContext::LoadLexicalDeclsFromExternalStorage() const {
   bool FieldsAlreadyLoaded = false;
   if (const auto *RD = dyn_cast<RecordDecl>(this))
     FieldsAlreadyLoaded = RD->LoadedFieldsFromExternalStorage;
-  
+
   // Splice the newly-read declarations into the beginning of the list
   // of declarations.
   Decl *ExternalFirst, *ExternalLast;
@@ -1350,6 +1347,38 @@ bool DeclContext::containsDecl(Decl *D) const {
           (D->NextInContextAndBits.getPointer() || D == LastDecl));
 }
 
+bool DeclContext::containsDeclAndLoad(Decl *D) const {
+  if (hasExternalLexicalStorage())
+    LoadLexicalDeclsFromExternalStorage();
+  return containsDecl(D);
+}
+
+/// shouldBeHidden - Determine whether a declaration which was declared
+/// within its semantic context should be invisible to qualified name lookup.
+static bool shouldBeHidden(NamedDecl *D) {
+  // Skip unnamed declarations.
+  if (!D->getDeclName())
+    return true;
+
+  // Skip entities that can't be found by name lookup into a particular
+  // context.
+  if ((D->getIdentifierNamespace() == 0 && !isa<UsingDirectiveDecl>(D)) ||
+      D->isTemplateParameter())
+    return true;
+
+  // Skip template specializations.
+  // FIXME: This feels like a hack. Should DeclarationName support
+  // template-ids, or is there a better way to keep specializations
+  // from being visible?
+  if (isa<ClassTemplateSpecializationDecl>(D))
+    return true;
+  if (auto *FD = dyn_cast<FunctionDecl>(D))
+    if (FD->isFunctionTemplateSpecialization())
+      return true;
+
+  return false;
+}
+
 void DeclContext::removeDecl(Decl *D) {
   assert(D->getLexicalDeclContext() == this &&
          "decl being removed from non-lexical context");
@@ -1372,7 +1401,7 @@ void DeclContext::removeDecl(Decl *D) {
       }
     }
   }
-  
+
   // Mark that D is no longer in the decl chain.
   D->NextInContextAndBits.setPointer(nullptr);
 
@@ -1380,8 +1409,14 @@ void DeclContext::removeDecl(Decl *D) {
   if (isa<NamedDecl>(D)) {
     auto *ND = cast<NamedDecl>(D);
 
+    // Do not try to remove the declaration if that is invisible to qualified
+    // lookup.  E.g. template specializations are skipped.
+    if (shouldBeHidden(ND))
+      return;
+
     // Remove only decls that have a name
-    if (!ND->getDeclName()) return;
+    if (!ND->getDeclName())
+      return;
 
     auto *DC = D->getDeclContext();
     do {
@@ -1389,7 +1424,9 @@ void DeclContext::removeDecl(Decl *D) {
       if (Map) {
         StoredDeclsMap::iterator Pos = Map->find(ND->getDeclName());
         assert(Pos != Map->end() && "no lookup entry for decl");
-        if (Pos->second.getAsVector() || Pos->second.getAsDecl() == ND)
+        // Remove the decl only if it is contained.
+        if ((Pos->second.getAsVector() && Pos->second.containsInVector(ND)) ||
+            Pos->second.getAsDecl() == ND)
           Pos->second.remove(ND);
       }
     } while (DC->isTransparentContext() && (DC = DC->getParent()));
@@ -1436,32 +1473,6 @@ void DeclContext::addDeclInternal(Decl *D) {
   if (auto *ND = dyn_cast<NamedDecl>(D))
     ND->getDeclContext()->getPrimaryContext()->
         makeDeclVisibleInContextWithFlags(ND, true, true);
-}
-
-/// shouldBeHidden - Determine whether a declaration which was declared
-/// within its semantic context should be invisible to qualified name lookup.
-static bool shouldBeHidden(NamedDecl *D) {
-  // Skip unnamed declarations.
-  if (!D->getDeclName())
-    return true;
-
-  // Skip entities that can't be found by name lookup into a particular
-  // context.
-  if ((D->getIdentifierNamespace() == 0 && !isa<UsingDirectiveDecl>(D)) ||
-      D->isTemplateParameter())
-    return true;
-
-  // Skip template specializations.
-  // FIXME: This feels like a hack. Should DeclarationName support
-  // template-ids, or is there a better way to keep specializations
-  // from being visible?
-  if (isa<ClassTemplateSpecializationDecl>(D))
-    return true;
-  if (auto *FD = dyn_cast<FunctionDecl>(D))
-    if (FD->isFunctionTemplateSpecialization())
-      return true;
-
-  return false;
 }
 
 /// buildLookup - Build the lookup data structure with all of the
@@ -1629,7 +1640,7 @@ void DeclContext::loadLazyLocalLexicalLookups() {
 void DeclContext::localUncachedLookup(DeclarationName Name,
                                       SmallVectorImpl<NamedDecl *> &Results) {
   Results.clear();
-  
+
   // If there's no external storage, just perform a normal lookup and copy
   // the results.
   if (!hasExternalVisibleStorage() && !hasExternalLexicalStorage() && Name) {
@@ -1652,7 +1663,7 @@ void DeclContext::localUncachedLookup(DeclarationName Name,
     }
   }
 
-  // Slow case: grovel through the declarations in our chain looking for 
+  // Slow case: grovel through the declarations in our chain looking for
   // matches.
   // FIXME: If we have lazy external declarations, this will not find them!
   // FIXME: Should we CollectAllContexts and walk them all here?
@@ -1883,7 +1894,7 @@ DependentDiagnostic *DependentDiagnostic::Create(ASTContext &C,
   PartialDiagnostic::Storage *DiagStorage = nullptr;
   if (PDiag.hasStorage())
     DiagStorage = new (C) PartialDiagnostic::Storage;
-  
+
   auto *DD = new (C) DependentDiagnostic(PDiag, DiagStorage);
 
   // TODO: Maybe we shouldn't reverse the order during insertion.

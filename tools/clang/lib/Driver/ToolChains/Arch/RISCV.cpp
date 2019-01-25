@@ -15,6 +15,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/TargetParser.h"
 #include "llvm/Support/raw_ostream.h"
+#include "ToolChains/CommonArgs.h"
 
 using namespace clang::driver;
 using namespace clang::driver::tools;
@@ -278,7 +279,7 @@ void riscv::getRISCVTargetFeatures(const Driver &D, const ArgList &Args,
     if (!getExtensionVersion(D, MArch, std::string(1, Baseline),
                              Exts, Major, Minor))
       return;
-    
+
     // TODO: Use version number when setting target features
     // and consume the underscore '_' that might follow.
 
@@ -363,6 +364,10 @@ void riscv::getRISCVTargetFeatures(const Driver &D, const ArgList &Args,
     // Handle all other types of extensions.
     getExtensionFeatures(D, Args, Features, MArch, OtherExts);
   }
+
+  // Now add any that the user explicitly requested on the command line,
+  // which may override the defaults.
+  handleTargetFeaturesGroup(Args, Features, options::OPT_m_riscv_Features_Group);
 }
 
 StringRef riscv::getRISCVABI(const ArgList &Args, const llvm::Triple &Triple) {

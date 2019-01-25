@@ -1,8 +1,14 @@
-// RUN: mkdir -p %T/ctudir
-// RUN: %clang_cc1 -triple x86_64-pc-linux-gnu -emit-pch -o %T/ctudir/ctu-other.cpp.ast %S/Inputs/ctu-other.cpp
-// RUN: %clang_cc1 -triple x86_64-pc-linux-gnu -emit-pch -o %T/ctudir/ctu-chain.cpp.ast %S/Inputs/ctu-chain.cpp
-// RUN: cp %S/Inputs/externalFnMap.txt %T/ctudir/
-// RUN: %clang_cc1 -triple x86_64-pc-linux-gnu -fsyntax-only -analyze -analyzer-checker=core,debug.ExprInspection -analyzer-config experimental-enable-naive-ctu-analysis=true -analyzer-config ctu-dir=%T/ctudir -verify %s
+// RUN: mkdir -p %t/ctudir
+// RUN: %clang_cc1 -triple x86_64-pc-linux-gnu -emit-pch -o %t/ctudir/ctu-other.cpp.ast %S/Inputs/ctu-other.cpp
+// RUN: %clang_cc1 -triple x86_64-pc-linux-gnu -emit-pch -o %t/ctudir/ctu-chain.cpp.ast %S/Inputs/ctu-chain.cpp
+// RUN: cp %S/Inputs/externalFnMap.txt %t/ctudir/
+// RUN: %clang_cc1 -triple x86_64-pc-linux-gnu -fsyntax-only -analyze -analyzer-checker=core,debug.ExprInspection -analyzer-config experimental-enable-naive-ctu-analysis=true -analyzer-config ctu-dir=%t/ctudir -verify %s
+// RUN: %clang_cc1 -triple x86_64-pc-linux-gnu -fsyntax-only -analyze -analyzer-checker=core,debug.ExprInspection -analyzer-config experimental-enable-naive-ctu-analysis=true -analyzer-config ctu-dir=%t/ctudir -analyzer-display-ctu-progress 2>&1 %s | FileCheck %s
+
+// CHECK: ANALYZE (CTU loaded AST for source file): {{.*}}/ctu-other.cpp
+// CHECK: ANALYZE (CTU loaded AST for source file): {{.*}}/ctu-chain.cpp
+
+#include "ctu-hdr.h"
 
 void clang_analyzer_eval(int);
 
@@ -41,6 +47,7 @@ int chf1(int x);
 }
 
 int fun_using_anon_struct(int);
+int other_macro_diag(int);
 
 int main() {
   clang_analyzer_eval(f(3) == 2); // expected-warning{{TRUE}}
@@ -58,4 +65,8 @@ int main() {
 
   clang_analyzer_eval(chns::chf1(4) == 12); // expected-warning{{TRUE}}
   clang_analyzer_eval(fun_using_anon_struct(8) == 8); // expected-warning{{TRUE}}
+
+  clang_analyzer_eval(other_macro_diag(1) == 1); // expected-warning{{TRUE}}
+  // expected-warning@Inputs/ctu-other.cpp:75{{REACHABLE}}
+  MACRODIAG(); // expected-warning{{REACHABLE}}
 }

@@ -58,6 +58,7 @@ set(files
   immintrin.h
   intrin.h
   inttypes.h
+  invpcidintrin.h
   iso646.h
   limits.h
   lwpintrin.h
@@ -73,10 +74,13 @@ set(files
   opencl-c.h
   pkuintrin.h
   pmmintrin.h
+  pconfigintrin.h
   popcntintrin.h
   prfchwintrin.h
+  ptwriteintrin.h
   rdseedintrin.h
   rtmintrin.h
+  sgxintrin.h
   s390intrin.h
   shaintrin.h
   smmintrin.h

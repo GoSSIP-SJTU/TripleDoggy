@@ -121,7 +121,7 @@ void Sema::ActOnForEachDeclStmt(DeclGroupPtrTy dg) {
   }
 }
 
-/// \brief Diagnose unused comparisons, both builtin and overloaded operators.
+/// Diagnose unused comparisons, both builtin and overloaded operators.
 /// For '==' and '!=', suggest fixits for '=' or '|='.
 ///
 /// Adding a cast to void (or other expression wrappers) will prevent the
@@ -216,7 +216,7 @@ void Sema::DiagnoseUnusedExprResult(const Stmt *S) {
   // expression is a call to a function with the warn_unused_result attribute,
   // we warn no matter the location. Because of the order in which the various
   // checks need to happen, we factor out the macro-related test here.
-  bool ShouldSuppress = 
+  bool ShouldSuppress =
       SourceMgr.isMacroBodyExpansion(ExprLoc) ||
       SourceMgr.isInSystemMacro(ExprLoc);
 
@@ -392,65 +392,79 @@ StmtResult Sema::ActOnCompoundStmt(SourceLocation L, SourceLocation R,
   return CompoundStmt::Create(Context, Elts, L, R);
 }
 
+ExprResult
+Sema::ActOnCaseExpr(SourceLocation CaseLoc, ExprResult Val) {
+  if (!Val.get())
+    return Val;
+
+  if (DiagnoseUnexpandedParameterPack(Val.get()))
+    return ExprError();
+
+  // If we're not inside a switch, let the 'case' statement handling diagnose
+  // this. Just clean up after the expression as best we can.
+  if (!getCurFunction()->SwitchStack.empty()) {
+    Expr *CondExpr =
+        getCurFunction()->SwitchStack.back().getPointer()->getCond();
+    if (!CondExpr)
+      return ExprError();
+    QualType CondType = CondExpr->getType();
+
+    auto CheckAndFinish = [&](Expr *E) {
+      if (CondType->isDependentType() || E->isTypeDependent())
+        return ExprResult(E);
+
+      if (getLangOpts().CPlusPlus11) {
+        // C++11 [stmt.switch]p2: the constant-expression shall be a converted
+        // constant expression of the promoted type of the switch condition.
+        llvm::APSInt TempVal;
+        return CheckConvertedConstantExpression(E, CondType, TempVal,
+                                                CCEK_CaseValue);
+      }
+
+      ExprResult ER = E;
+      if (!E->isValueDependent())
+        ER = VerifyIntegerConstantExpression(E);
+      if (!ER.isInvalid())
+        ER = DefaultLvalueConversion(ER.get());
+      if (!ER.isInvalid())
+        ER = ImpCastExprToType(ER.get(), CondType, CK_IntegralCast);
+      return ER;
+    };
+
+    ExprResult Converted = CorrectDelayedTyposInExpr(Val, CheckAndFinish);
+    if (Converted.get() == Val.get())
+      Converted = CheckAndFinish(Val.get());
+    if (Converted.isInvalid())
+      return ExprError();
+    Val = Converted;
+  }
+
+  return ActOnFinishFullExpr(Val.get(), Val.get()->getExprLoc(), false,
+                             getLangOpts().CPlusPlus11);
+}
+
 StmtResult
-Sema::ActOnCaseStmt(SourceLocation CaseLoc, Expr *LHSVal,
-                    SourceLocation DotDotDotLoc, Expr *RHSVal,
+Sema::ActOnCaseStmt(SourceLocation CaseLoc, ExprResult LHSVal,
+                    SourceLocation DotDotDotLoc, ExprResult RHSVal,
                     SourceLocation ColonLoc) {
-  assert(LHSVal && "missing expression in case statement");
+  assert((LHSVal.isInvalid() || LHSVal.get()) && "missing LHS value");
+  assert((DotDotDotLoc.isInvalid() ? RHSVal.isUnset()
+                                   : RHSVal.isInvalid() || RHSVal.get()) &&
+         "missing RHS value");
 
   if (getCurFunction()->SwitchStack.empty()) {
     Diag(CaseLoc, diag::err_case_not_in_switch);
     return StmtError();
   }
 
-  ExprResult LHS =
-      CorrectDelayedTyposInExpr(LHSVal, [this](class Expr *E) {
-        if (!getLangOpts().CPlusPlus11)
-          return VerifyIntegerConstantExpression(E);
-        if (Expr *CondExpr =
-                getCurFunction()->SwitchStack.back()->getCond()) {
-          QualType CondType = CondExpr->getType();
-          llvm::APSInt TempVal;
-          return CheckConvertedConstantExpression(E, CondType, TempVal,
-                                                        CCEK_CaseValue);
-        }
-        return ExprError();
-      });
-  if (LHS.isInvalid())
+  if (LHSVal.isInvalid() || RHSVal.isInvalid()) {
+    getCurFunction()->SwitchStack.back().setInt(true);
     return StmtError();
-  LHSVal = LHS.get();
-
-  if (!getLangOpts().CPlusPlus11) {
-    // C99 6.8.4.2p3: The expression shall be an integer constant.
-    // However, GCC allows any evaluatable integer expression.
-    if (!LHSVal->isTypeDependent() && !LHSVal->isValueDependent()) {
-      LHSVal = VerifyIntegerConstantExpression(LHSVal).get();
-      if (!LHSVal)
-        return StmtError();
-    }
-
-    // GCC extension: The expression shall be an integer constant.
-
-    if (RHSVal && !RHSVal->isTypeDependent() && !RHSVal->isValueDependent()) {
-      RHSVal = VerifyIntegerConstantExpression(RHSVal).get();
-      // Recover from an error by just forgetting about it.
-    }
   }
 
-  LHS = ActOnFinishFullExpr(LHSVal, LHSVal->getExprLoc(), false,
-                                 getLangOpts().CPlusPlus11);
-  if (LHS.isInvalid())
-    return StmtError();
-
-  auto RHS = RHSVal ? ActOnFinishFullExpr(RHSVal, RHSVal->getExprLoc(), false,
-                                          getLangOpts().CPlusPlus11)
-                    : ExprResult();
-  if (RHS.isInvalid())
-    return StmtError();
-
   CaseStmt *CS = new (Context)
-      CaseStmt(LHS.get(), RHS.get(), CaseLoc, DotDotDotLoc, ColonLoc);
-  getCurFunction()->SwitchStack.back()->addSwitchCase(CS);
+      CaseStmt(LHSVal.get(), RHSVal.get(), CaseLoc, DotDotDotLoc, ColonLoc);
+  getCurFunction()->SwitchStack.back().getPointer()->addSwitchCase(CS);
   return CS;
 }
 
@@ -473,7 +487,7 @@ Sema::ActOnDefaultStmt(SourceLocation DefaultLoc, SourceLocation ColonLoc,
   }
 
   DefaultStmt *DS = new (Context) DefaultStmt(DefaultLoc, ColonLoc, SubStmt);
-  getCurFunction()->SwitchStack.back()->addSwitchCase(DS);
+  getCurFunction()->SwitchStack.back().getPointer()->addSwitchCase(DS);
   return DS;
 }
 
@@ -679,20 +693,44 @@ ExprResult Sema::CheckSwitchCondition(SourceLocation SwitchLoc, Expr *Cond) {
   if (CondResult.isInvalid())
     return ExprError();
 
+  // FIXME: PerformContextualImplicitConversion doesn't always tell us if it
+  // failed and produced a diagnostic.
+  Cond = CondResult.get();
+  if (!Cond->isTypeDependent() &&
+      !Cond->getType()->isIntegralOrEnumerationType())
+    return ExprError();
+
   // C99 6.8.4.2p5 - Integer promotions are performed on the controlling expr.
-  return UsualUnaryConversions(CondResult.get());
+  return UsualUnaryConversions(Cond);
 }
 
 StmtResult Sema::ActOnStartOfSwitchStmt(SourceLocation SwitchLoc,
                                         Stmt *InitStmt, ConditionResult Cond) {
-  if (Cond.isInvalid())
-    return StmtError();
+  Expr *CondExpr = Cond.get().second;
+  assert((Cond.isInvalid() || CondExpr) && "switch with no condition");
+
+  if (CondExpr && !CondExpr->isTypeDependent()) {
+    // We have already converted the expression to an integral or enumeration
+    // type, when we parsed the switch condition. If we don't have an
+    // appropriate type now, enter the switch scope but remember that it's
+    // invalid.
+    assert(CondExpr->getType()->isIntegralOrEnumerationType() &&
+           "invalid condition type");
+    if (CondExpr->isKnownToHaveBooleanValue()) {
+      // switch(bool_expr) {...} is often a programmer error, e.g.
+      //   switch(n && mask) { ... }  // Doh - should be "n & mask".
+      // One can always use an if statement instead of switch(bool_expr).
+      Diag(SwitchLoc, diag::warn_bool_switch_condition)
+          << CondExpr->getSourceRange();
+    }
+  }
 
   setFunctionHasBranchIntoScope();
 
   SwitchStmt *SS = new (Context)
-      SwitchStmt(Context, InitStmt, Cond.get().first, Cond.get().second);
-  getCurFunction()->SwitchStack.push_back(SS);
+      SwitchStmt(Context, InitStmt, Cond.get().first, CondExpr);
+  getCurFunction()->SwitchStack.push_back(
+      FunctionScopeInfo::SwitchInfo(SS, false));
   return SS;
 }
 
@@ -705,6 +743,10 @@ static void AdjustAPSInt(llvm::APSInt &Val, unsigned BitWidth, bool IsSigned) {
 /// type.
 static void checkCaseValue(Sema &S, SourceLocation Loc, const llvm::APSInt &Val,
                            unsigned UnpromotedWidth, bool UnpromotedSign) {
+  // In C++11 onwards, this is checked by the language rules.
+  if (S.getLangOpts().CPlusPlus11)
+    return;
+
   // If the case value was signed and negative and the switch expression is
   // unsigned, don't bother to warn: this is implementation-defined behavior.
   // FIXME: Introduce a second, default-ignored warning for this case?
@@ -759,7 +801,7 @@ static bool ShouldDiagnoseSwitchCaseNotInEnum(const Sema &S,
 
 static void checkEnumTypesInSwitchStmt(Sema &S, const Expr *Cond,
                                        const Expr *Case) {
-  QualType CondType = GetTypeBeforeIntegralPromotion(Cond);
+  QualType CondType = Cond->getType();
   QualType CaseType = Case->getType();
 
   const EnumType *CondEnumType = CondType->getAs<EnumType>();
@@ -787,7 +829,8 @@ StmtResult
 Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
                             Stmt *BodyStmt) {
   SwitchStmt *SS = cast<SwitchStmt>(Switch);
-  assert(SS == getCurFunction()->SwitchStack.back() &&
+  bool CaseListIsIncomplete = getCurFunction()->SwitchStack.back().getInt();
+  assert(SS == getCurFunction()->SwitchStack.back().getPointer() &&
          "switch stack missing push/pop!");
 
   getCurFunction()->SwitchStack.pop_back();
@@ -800,10 +843,6 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
 
   QualType CondType = CondExpr->getType();
 
-  const Expr *CondExprBeforePromotion = CondExpr;
-  QualType CondTypeBeforePromotion =
-      GetTypeBeforeIntegralPromotion(CondExprBeforePromotion);
-
   // C++ 6.4.2.p2:
   // Integral promotions are performed (on the switch condition).
   //
@@ -811,21 +850,9 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
   // type (before the promotion) doesn't make sense, even when it can
   // be represented by the promoted type.  Therefore we need to find
   // the pre-promotion type of the switch condition.
-  if (!CondExpr->isTypeDependent()) {
-    // We have already converted the expression to an integral or enumeration
-    // type, when we started the switch statement. If we don't have an
-    // appropriate type now, just return an error.
-    if (!CondType->isIntegralOrEnumerationType())
-      return StmtError();
-
-    if (CondExpr->isKnownToHaveBooleanValue()) {
-      // switch(bool_expr) {...} is often a programmer error, e.g.
-      //   switch(n && mask) { ... }  // Doh - should be "n & mask".
-      // One can always use an if statement instead of switch(bool_expr).
-      Diag(SwitchLoc, diag::warn_bool_switch_condition)
-          << CondExpr->getSourceRange();
-    }
-  }
+  const Expr *CondExprBeforePromotion = CondExpr;
+  QualType CondTypeBeforePromotion =
+      GetTypeBeforeIntegralPromotion(CondExprBeforePromotion);
 
   // Get the bitwidth of the switched-on value after promotions. We must
   // convert the integer case values to this width before comparison.
@@ -878,50 +905,32 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
 
       Expr *Lo = CS->getLHS();
 
-      if (Lo->isTypeDependent() || Lo->isValueDependent()) {
+      if (Lo->isValueDependent()) {
         HasDependentValue = true;
         break;
       }
 
-      checkEnumTypesInSwitchStmt(*this, CondExpr, Lo);
-
-      llvm::APSInt LoVal;
-
-      if (getLangOpts().CPlusPlus11) {
-        // C++11 [stmt.switch]p2: the constant-expression shall be a converted
-        // constant expression of the promoted type of the switch condition.
-        ExprResult ConvLo =
-          CheckConvertedConstantExpression(Lo, CondType, LoVal, CCEK_CaseValue);
-        if (ConvLo.isInvalid()) {
-          CaseListIsErroneous = true;
-          continue;
-        }
-        Lo = ConvLo.get();
-      } else {
-        // We already verified that the expression has a i-c-e value (C99
-        // 6.8.4.2p3) - get that value now.
-        LoVal = Lo->EvaluateKnownConstInt(Context);
-
-        // If the LHS is not the same type as the condition, insert an implicit
-        // cast.
-        Lo = DefaultLvalueConversion(Lo).get();
-        Lo = ImpCastExprToType(Lo, CondType, CK_IntegralCast).get();
-      }
+      // We already verified that the expression has a constant value;
+      // get that value (prior to conversions).
+      const Expr *LoBeforePromotion = Lo;
+      GetTypeBeforeIntegralPromotion(LoBeforePromotion);
+      llvm::APSInt LoVal = LoBeforePromotion->EvaluateKnownConstInt(Context);
 
       // Check the unconverted value is within the range of possible values of
       // the switch expression.
       checkCaseValue(*this, Lo->getLocStart(), LoVal,
                      CondWidthBeforePromotion, CondIsSignedBeforePromotion);
 
+      // FIXME: This duplicates the check performed for warn_not_in_enum below.
+      checkEnumTypesInSwitchStmt(*this, CondExprBeforePromotion,
+                                 LoBeforePromotion);
+
       // Convert the value to the same width/sign as the condition.
       AdjustAPSInt(LoVal, CondWidth, CondIsSigned);
 
-      CS->setLHS(Lo);
-
       // If this is a case range, remember it in CaseRanges, otherwise CaseVals.
       if (CS->getRHS()) {
-        if (CS->getRHS()->isTypeDependent() ||
-            CS->getRHS()->isValueDependent()) {
+        if (CS->getRHS()->isValueDependent()) {
           HasDependentValue = true;
           break;
         }
@@ -1002,27 +1011,10 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
         llvm::APSInt &LoVal = CaseRanges[i].first;
         CaseStmt *CR = CaseRanges[i].second;
         Expr *Hi = CR->getRHS();
-        llvm::APSInt HiVal;
 
-        if (getLangOpts().CPlusPlus11) {
-          // C++11 [stmt.switch]p2: the constant-expression shall be a converted
-          // constant expression of the promoted type of the switch condition.
-          ExprResult ConvHi =
-            CheckConvertedConstantExpression(Hi, CondType, HiVal,
-                                             CCEK_CaseValue);
-          if (ConvHi.isInvalid()) {
-            CaseListIsErroneous = true;
-            continue;
-          }
-          Hi = ConvHi.get();
-        } else {
-          HiVal = Hi->EvaluateKnownConstInt(Context);
-
-          // If the RHS is not the same type as the condition, insert an
-          // implicit cast.
-          Hi = DefaultLvalueConversion(Hi).get();
-          Hi = ImpCastExprToType(Hi, CondType, CK_IntegralCast).get();
-        }
+        const Expr *HiBeforePromotion = Hi;
+        GetTypeBeforeIntegralPromotion(HiBeforePromotion);
+        llvm::APSInt HiVal = HiBeforePromotion->EvaluateKnownConstInt(Context);
 
         // Check the unconverted value is within the range of possible values of
         // the switch expression.
@@ -1031,8 +1023,6 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
 
         // Convert the value to the same width/sign as the condition.
         AdjustAPSInt(HiVal, CondWidth, CondIsSigned);
-
-        CR->setRHS(Hi);
 
         // If the low value is bigger than the high value, the case is empty.
         if (LoVal > HiVal) {
@@ -1104,7 +1094,8 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
     }
 
     // Complain if we have a constant condition and we didn't find a match.
-    if (!CaseListIsErroneous && ShouldCheckConstantCond) {
+    if (!CaseListIsErroneous && !CaseListIsIncomplete &&
+        ShouldCheckConstantCond) {
       // TODO: it would be nice if we printed enums as enums, chars as
       // chars, etc.
       Diag(CondExpr->getExprLoc(), diag::warn_missing_case_for_condition)
@@ -1120,8 +1111,8 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
     const EnumType *ET = CondTypeBeforePromotion->getAs<EnumType>();
 
     // If switch has default case, then ignore it.
-    if (!CaseListIsErroneous && !HasConstantCond && ET &&
-        ET->getDecl()->isCompleteDefinition()) {
+    if (!CaseListIsErroneous && !CaseListIsIncomplete && !HasConstantCond &&
+        ET && ET->getDecl()->isCompleteDefinition()) {
       const EnumDecl *ED = ET->getDecl();
       EnumValsTy EnumVals;
 
@@ -1888,7 +1879,7 @@ Sema::ActOnObjCForCollectionStmt(SourceLocation ForLoc,
       VarDecl *D = dyn_cast<VarDecl>(DS->getSingleDecl());
       if (!D || D->isInvalidDecl())
         return StmtError();
-      
+
       FirstType = D->getType();
       // C99 6.8.5p3: The declaration part of a 'for' statement shall only
       // declare identifiers for objects having storage class 'auto' or
@@ -2121,7 +2112,7 @@ StmtResult Sema::ActOnCXXForRangeStmt(Scope *S, SourceLocation ForLoc,
                               DS, RParenLoc, Kind);
 }
 
-/// \brief Create the initialization, compare, and increment steps for
+/// Create the initialization, compare, and increment steps for
 /// the range-based for loop expression.
 /// This function does not handle array-based for loops,
 /// which are created in Sema::BuildCXXForRangeStmt.
@@ -2382,7 +2373,7 @@ Sema::BuildCXXForRangeStmt(SourceLocation ForLoc, SourceLocation CoawaitLoc,
         // Rather, we need to determine what it was when the array was first
         // created - so we resort to using sizeof(vla)/sizeof(element).
         // For e.g.
-        //  void f(int b) { 
+        //  void f(int b) {
         //    int vla[b];
         //    b = -1;   <-- This should not affect the num of iterations below
         //    for (int &c : vla) { .. }
@@ -2408,7 +2399,7 @@ Sema::BuildCXXForRangeStmt(SourceLocation ForLoc, SourceLocation CoawaitLoc,
             EndVar->getSourceRange());
         if (SizeOfVLAExprR.isInvalid())
           return StmtError();
-        
+
         ExprResult SizeOfEachElementExprR = ActOnUnaryExprOrTypeTraitExpr(
             EndVar->getLocation(), UETT_SizeOf,
             /*isType=*/true,
@@ -2425,7 +2416,7 @@ Sema::BuildCXXForRangeStmt(SourceLocation ForLoc, SourceLocation CoawaitLoc,
                        SizeOfVLAExprR.get(), SizeOfEachElementExprR.get());
         if (BoundExpr.isInvalid())
           return StmtError();
-        
+
       } else {
         // Can't be a DependentSizedArrayType or an IncompleteArrayType since
         // UnqAT is not incomplete and Range is not type-dependent.
@@ -2851,7 +2842,7 @@ Sema::ActOnBreakStmt(SourceLocation BreakLoc, Scope *CurScope) {
   return new (Context) BreakStmt(BreakLoc);
 }
 
-/// \brief Determine whether the given expression is a candidate for
+/// Determine whether the given expression is a candidate for
 /// copy elision in either a return statement or a throw expression.
 ///
 /// \param ReturnType If we're determining the copy elision candidate for
@@ -2931,7 +2922,7 @@ bool Sema::isCopyElisionCandidate(QualType ReturnType, const VarDecl *VD,
   return true;
 }
 
-/// \brief Try to perform the initialization of a potentially-movable value,
+/// Try to perform the initialization of a potentially-movable value,
 /// which is the operand to a return or throw statement.
 ///
 /// This routine implements C++14 [class.copy]p32, which attempts to treat
@@ -3019,7 +3010,7 @@ static void TryMoveInitialization(Sema& S,
   }
 }
 
-/// \brief Perform the initialization of a potentially-movable value, which
+/// Perform the initialization of a potentially-movable value, which
 /// is the result of return value.
 ///
 /// This routine implements C++14 [class.copy]p32, which attempts to treat
@@ -3131,7 +3122,7 @@ Sema::PerformMoveOrCopyInitialization(const InitializedEntity &Entity,
   return Res;
 }
 
-/// \brief Determine whether the declared return type of the specified function
+/// Determine whether the declared return type of the specified function
 /// contains 'auto'.
 static bool hasDeducedReturnType(FunctionDecl *FD) {
   const FunctionProtoType *FPT =
@@ -3303,7 +3294,7 @@ Sema::ActOnCapScopeReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
 }
 
 namespace {
-/// \brief Marks all typedefs in all local classes in a type referenced.
+/// Marks all typedefs in all local classes in a type referenced.
 ///
 /// In a function like
 /// auto f() {
@@ -3375,7 +3366,7 @@ bool Sema::DeduceFunctionTypeFromReturnExpr(FunctionDecl *FD,
     //   statement with a non-type-dependent operand.
     assert(AT->isDeduced() && "should have deduced to dependent type");
     return false;
-  } 
+  }
 
   if (RetExpr) {
     //  Otherwise, [...] deduce a value for U using the rules of template
@@ -4283,7 +4274,7 @@ void Sema::ActOnCapturedRegionError() {
 
   SmallVector<Decl*, 4> Fields(Record->fields());
   ActOnFields(/*Scope=*/nullptr, Record->getLocation(), Record, Fields,
-              SourceLocation(), SourceLocation(), /*AttributeList=*/nullptr);
+              SourceLocation(), SourceLocation(), ParsedAttributesView());
 
   PopDeclContext();
   PopFunctionScopeInfo();

@@ -11,8 +11,11 @@ find_first_existing_vc_file(clang_vc "${CLANG_SOURCE_DIR}")
 set(version_inc "${CMAKE_CURRENT_BINARY_DIR}/SVNVersion.inc")
 
 set(get_svn_script "${LLVM_CMAKE_PATH}/GetSVN.cmake")
+if(DEFINED NO_REV_GEN)
+	message(STATUS "No revision include generation ${NO_REV_GEN}")
+endif()
 
-if(DEFINED llvm_vc AND DEFINED clang_vc)
+if(NOT DEFINED NO_REV_GEN AND DEFINED llvm_vc AND DEFINED clang_vc)
   # Create custom target to generate the VC revision include.
   add_custom_command(OUTPUT "${version_inc}"
     DEPENDS "${llvm_vc}" "${clang_vc}" "${get_svn_script}"
@@ -36,11 +39,31 @@ else()
   # Not producing a VC revision include.
   set(version_inc)
 
-  # Being able to force-set the SVN revision in cases where it isn't available
+  # Being able to force-set the clang and llvm revision in cases where it isn't available
   # is useful for performance tracking, and matches compatibility from autoconf.
   if(SVN_REVISION)
-    set_source_files_properties(Version.cpp
-      PROPERTIES COMPILE_DEFINITIONS "SVN_REVISION=\"${SVN_REVISION}\"")
+	set_property(
+		SOURCE Version.cpp
+		APPEND
+        PROPERTY COMPILE_DEFINITIONS "SVN_REVISION=\"${SVN_REVISION}\"")
+  endif()
+  if(SVN_REPOSITORY)
+	set_property(
+		SOURCE Version.cpp
+		APPEND
+        PROPERTY COMPILE_DEFINITIONS "SVN_REPOSITORY=\"${SVN_REPOSITORY}\"")
+  endif()
+  if(LLVM_REVISION)
+	set_property(
+		SOURCE Version.cpp
+		APPEND
+        PROPERTY COMPILE_DEFINITIONS "LLVM_REVISION=\"${LLVM_REVISION}\"")
+  endif()
+  if(LLVM_REPOSITORY)
+	set_property(
+		SOURCE Version.cpp
+		APPEND
+        PROPERTY COMPILE_DEFINITIONS "LLVM_REPOSITORY=\"${LLVM_REPOSITORY}\"")
   endif()
 endif()
 
@@ -93,7 +116,6 @@ add_clang_library(clangBasic
   Targets/XCore.cpp
   TokenKinds.cpp
   Version.cpp
-  VersionTuple.cpp
   VirtualFileSystem.cpp
   Warnings.cpp
   XRayInstr.cpp

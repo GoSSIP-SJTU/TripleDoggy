@@ -57,7 +57,12 @@ LookupSameContext(Source<TranslationUnitDecl *> SourceTU, const DeclContext *DC,
   }
   auto *ND = cast<NamedDecl>(DC);
   DeclarationName Name = ND->getDeclName();
-  Source<DeclarationName> SourceName = ReverseImporter.Import(Name);
+  auto SourceNameOrErr = ReverseImporter.Import(Name);
+  if (!SourceNameOrErr) {
+    llvm::consumeError(SourceNameOrErr.takeError());
+    return nullptr;
+  }
+  Source<DeclarationName> SourceName = *SourceNameOrErr;
   DeclContext::lookup_result SearchResult =
       SourceParentDC.get()->lookup(SourceName.get());
   size_t SearchResultSize = SearchResult.size();
@@ -144,17 +149,17 @@ public:
     }
     if (auto *ToTag = dyn_cast<TagDecl>(To)) {
       ToTag->setHasExternalLexicalStorage();
-      ToTag->setMustBuildLookupTable();
+      ToTag->getPrimaryContext()->setMustBuildLookupTable();
       assert(Parent.CanComplete(ToTag));
     } else if (auto *ToNamespace = dyn_cast<NamespaceDecl>(To)) {
       ToNamespace->setHasExternalVisibleStorage();
       assert(Parent.CanComplete(ToNamespace));
     } else if (auto *ToContainer = dyn_cast<ObjCContainerDecl>(To)) {
       ToContainer->setHasExternalLexicalStorage();
-      ToContainer->setMustBuildLookupTable();
+      ToContainer->getPrimaryContext()->setMustBuildLookupTable();
       assert(Parent.CanComplete(ToContainer));
     }
-    return ASTImporter::Imported(From, To);
+    return To;
   }
   ASTImporter &GetReverse() { return Reverse; }
 };
@@ -229,8 +234,9 @@ void ExternalASTMerger::CompleteType(TagDecl *Tag) {
       SourceTag->getASTContext().getExternalSource()->CompleteType(SourceTag);
     if (!SourceTag->getDefinition())
       return false;
-    Forward.Imported(SourceTag, Tag);
-    Forward.ImportDefinition(SourceTag);
+    Forward.MapImported(SourceTag, Tag);
+    if (llvm::Error Err = Forward.ImportDefinition_New(SourceTag))
+      llvm::consumeError(std::move(Err));
     Tag->setCompleteDefinition(SourceTag->isCompleteDefinition());
     return true;
   });
@@ -248,8 +254,9 @@ void ExternalASTMerger::CompleteType(ObjCInterfaceDecl *Interface) {
               SourceInterface);
         if (!SourceInterface->getDefinition())
           return false;
-        Forward.Imported(SourceInterface, Interface);
-        Forward.ImportDefinition(SourceInterface);
+        Forward.MapImported(SourceInterface, Interface);
+        if (llvm::Error Err = Forward.ImportDefinition_New(SourceInterface))
+          llvm::consumeError(std::move(Err));
         return true;
       });
 }
@@ -304,7 +311,7 @@ void ExternalASTMerger::ForceRecordOrigin(const DeclContext *ToDC,
 void ExternalASTMerger::RecordOriginImpl(const DeclContext *ToDC, DCOrigin Origin,
                                          ASTImporter &Importer) {
   Origins[ToDC] = Origin;
-  Importer.ASTImporter::Imported(cast<Decl>(Origin.DC), const_cast<Decl*>(cast<Decl>(ToDC)));
+  Importer.ASTImporter::MapImported(cast<Decl>(Origin.DC), const_cast<Decl*>(cast<Decl>(ToDC)));
 }
 
 ExternalASTMerger::ExternalASTMerger(const ImporterTarget &Target,
@@ -383,15 +390,21 @@ bool ExternalASTMerger::FindExternalVisibleDeclsByName(const DeclContext *DC,
      Candidates.push_back(C);
   };
 
-  ForEachMatchingDC(DC, [&](ASTImporter &Forward, ASTImporter &Reverse,
-                            Source<const DeclContext *> SourceDC) -> bool {
-    DeclarationName FromName = Reverse.Import(Name);
-    DeclContextLookupResult Result = SourceDC.get()->lookup(FromName);
-    for (NamedDecl *FromD : Result) {
-      FilterFoundDecl(std::make_pair(FromD, &Forward));
-    }
-    return false;
-  });
+  ForEachMatchingDC(DC,
+                    [&](ASTImporter &Forward, ASTImporter &Reverse,
+                        Source<const DeclContext *> SourceDC) -> bool {
+                      auto FromNameOrErr = Reverse.Import(Name);
+                      if (!FromNameOrErr) {
+                        llvm::consumeError(FromNameOrErr.takeError());
+                        return false;
+                      }
+                      DeclContextLookupResult Result =
+                          SourceDC.get()->lookup(*FromNameOrErr);
+                      for (NamedDecl *FromD : Result) {
+                        FilterFoundDecl(std::make_pair(FromD, &Forward));
+                      }
+                      return false;
+                    });
 
   if (Candidates.empty())
     return false;
@@ -400,7 +413,9 @@ bool ExternalASTMerger::FindExternalVisibleDeclsByName(const DeclContext *DC,
   for (const Candidate &C : Candidates) {
     Decl *LookupRes = C.first.get();
     ASTImporter *Importer = C.second;
-    NamedDecl *ND = cast_or_null<NamedDecl>(Importer->Import(LookupRes));
+    auto NDOrErr = Importer->Import(LookupRes);
+    assert(NDOrErr);
+    NamedDecl *ND = cast_or_null<NamedDecl>(*NDOrErr);
     assert(ND);
     // If we don't import specialization, they are not available via lookup
     // because the lookup result is imported TemplateDecl and it does not
@@ -422,9 +437,12 @@ void ExternalASTMerger::FindExternalLexicalDecls(
                             Source<const DeclContext *> SourceDC) -> bool {
     for (const Decl *SourceDecl : SourceDC.get()->decls()) {
       if (IsKindWeWant(SourceDecl->getKind())) {
-        Decl *ImportedDecl = Forward.Import(const_cast<Decl *>(SourceDecl));
-        assert(!ImportedDecl || IsSameDC(ImportedDecl->getDeclContext(), DC));
-        (void)ImportedDecl;
+        auto ImportedDeclOrErr = Forward.Import(SourceDecl);
+        if (ImportedDeclOrErr)
+          assert(!(*ImportedDeclOrErr) ||
+                 IsSameDC((*ImportedDeclOrErr)->getDeclContext(), DC));
+        else
+          llvm::consumeError(ImportedDeclOrErr.takeError());
       }
     }
     return false;

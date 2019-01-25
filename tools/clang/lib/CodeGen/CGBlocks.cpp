@@ -85,7 +85,7 @@ static llvm::Constant *buildBlockDescriptor(CodeGenModule &CGM,
     cast<llvm::IntegerType>(CGM.getTypes().ConvertType(C.UnsignedLongTy));
   llvm::PointerType *i8p = nullptr;
   if (CGM.getLangOpts().OpenCL)
-    i8p = 
+    i8p =
       llvm::Type::getInt8PtrTy(
            CGM.getLLVMContext(), C.getTargetAddressSpace(LangAS::opencl_constant));
   else
@@ -104,7 +104,7 @@ static llvm::Constant *buildBlockDescriptor(CodeGenModule &CGM,
   elements.addInt(ulong, blockInfo.BlockSize.getQuantity());
 
   // Optional copy/dispose helpers.
-  if (blockInfo.NeedsCopyDispose) {
+  if (blockInfo.needsCopyDisposeHelpers()) {
     // copy_func_helper_decl
     elements.add(buildCopyHelper(CGM, blockInfo));
 
@@ -117,7 +117,7 @@ static llvm::Constant *buildBlockDescriptor(CodeGenModule &CGM,
     CGM.getContext().getObjCEncodingForBlock(blockInfo.getBlockExpr());
   elements.add(llvm::ConstantExpr::getBitCast(
     CGM.GetAddrOfConstantCString(typeAtEncoding).getPointer(), i8p));
-  
+
   // GC layout.
   if (C.getLangOpts().ObjC1) {
     if (CGM.getLangOpts().getGC() != LangOptions::NonGC)
@@ -159,6 +159,7 @@ static llvm::Constant *buildBlockDescriptor(CodeGenModule &CGM,
 
     /// These are the flags (with corresponding bit number) that the
     /// compiler is actually supposed to know about.
+    ///  23. BLOCK_IS_NOESCAPE - indicates that the block is non-escaping
     ///  25. BLOCK_HAS_COPY_DISPOSE - indicates that the block
     ///   descriptor provides copy and dispose helper functions
     ///  26. BLOCK_HAS_CXX_OBJ - indicates that there's a captured
@@ -380,7 +381,7 @@ static void computeBlockInfo(CodeGenModule &CGM, CodeGenFunction *CGF,
   else if (C.getLangOpts().ObjC1 &&
            CGM.getLangOpts().getGC() == LangOptions::NonGC)
     info.HasCapturedVariableLayout = true;
-  
+
   // Collect the layout chunks.
   SmallVector<BlockLayoutChunk, 16> layout;
   layout.reserve(block->capturesCXXThis() +
@@ -486,12 +487,12 @@ static void computeBlockInfo(CodeGenModule &CGM, CodeGenFunction *CGF,
     QualType VT = getCaptureFieldType(*CGF, CI);
     CharUnits size = C.getTypeSizeInChars(VT);
     CharUnits align = C.getDeclAlign(variable);
-    
+
     maxFieldAlign = std::max(maxFieldAlign, align);
 
     llvm::Type *llvmType =
       CGM.getTypes().ConvertTypeForMem(VT);
-    
+
     layout.push_back(
         BlockLayoutChunk(align, size, lifetime, &CI, llvmType, VT));
   }
@@ -508,11 +509,11 @@ static void computeBlockInfo(CodeGenModule &CGM, CodeGenFunction *CGF,
   // to get reproducible results.  There should probably be an
   // llvm::array_pod_stable_sort.
   std::stable_sort(layout.begin(), layout.end());
-  
+
   // Needed for blocks layout info.
   info.BlockHeaderForcedGapOffset = info.BlockSize;
   info.BlockHeaderForcedGapSize = CharUnits::Zero();
-  
+
   CharUnits &blockSize = info.BlockSize;
   info.BlockAlign = std::max(maxFieldAlign, info.BlockAlign);
 
@@ -563,7 +564,7 @@ static void computeBlockInfo(CodeGenModule &CGM, CodeGenFunction *CGF,
   }
 
   assert(endAlign == getLowBit(blockSize));
-  
+
   // At this point, we just have to add padding if the end align still
   // isn't aligned right.
   if (endAlign < maxFieldAlign) {
@@ -684,7 +685,7 @@ static void enterBlockScope(CodeGenFunction &CGF, BlockDecl *block) {
 
     CleanupKind cleanupKind = InactiveNormalCleanup;
     bool useArrayEHCleanup = CGF.needsEHCleanup(dtorKind);
-    if (useArrayEHCleanup) 
+    if (useArrayEHCleanup)
       cleanupKind = InactiveNormalAndEHCleanup;
 
     CGF.pushDestroy(cleanupKind, addr, VT,
@@ -778,8 +779,13 @@ llvm::Value *CodeGenFunction::EmitBlockLiteral(const CGBlockInfo &blockInfo) {
   llvm::Constant *descriptor;
   BlockFlags flags;
   if (!IsOpenCL) {
-    isa = llvm::ConstantExpr::getBitCast(CGM.getNSConcreteStackBlock(),
-                                         VoidPtrTy);
+    // If the block is non-escaping, set field 'isa 'to NSConcreteGlobalBlock
+    // and set the BLOCK_IS_GLOBAL bit of field 'flags'. Copying a non-escaping
+    // block just returns the original block and releasing it is a no-op.
+    llvm::Constant *blockISA = blockInfo.getBlockDecl()->doesNotEscape()
+                                   ? CGM.getNSConcreteGlobalBlock()
+                                   : CGM.getNSConcreteStackBlock();
+    isa = llvm::ConstantExpr::getBitCast(blockISA, VoidPtrTy);
 
     // Build the block descriptor.
     descriptor = buildBlockDescriptor(CGM, blockInfo);
@@ -788,12 +794,14 @@ llvm::Value *CodeGenFunction::EmitBlockLiteral(const CGBlockInfo &blockInfo) {
     flags = BLOCK_HAS_SIGNATURE;
     if (blockInfo.HasCapturedVariableLayout)
       flags |= BLOCK_HAS_EXTENDED_LAYOUT;
-    if (blockInfo.NeedsCopyDispose)
+    if (blockInfo.needsCopyDisposeHelpers())
       flags |= BLOCK_HAS_COPY_DISPOSE;
     if (blockInfo.HasCXXObject)
       flags |= BLOCK_HAS_CXX_OBJ;
     if (blockInfo.UsesStret)
       flags |= BLOCK_USE_STRET;
+    if (blockInfo.getBlockDecl()->doesNotEscape())
+      flags |= BLOCK_IS_NOESCAPE | BLOCK_IS_GLOBAL;
   }
 
   auto projectField =
@@ -1205,9 +1213,13 @@ static llvm::Constant *buildGlobalBlock(CodeGenModule &CGM,
   auto fields = builder.beginStruct();
 
   bool IsOpenCL = CGM.getLangOpts().OpenCL;
+  bool IsWindows = CGM.getTarget().getTriple().isOSWindows();
   if (!IsOpenCL) {
     // isa
-    fields.add(CGM.getNSConcreteGlobalBlock());
+    if (IsWindows)
+      fields.addNullPointer(CGM.Int8PtrPtrTy);
+    else
+      fields.add(CGM.getNSConcreteGlobalBlock());
 
     // __flags
     BlockFlags flags = BLOCK_IS_GLOBAL | BLOCK_HAS_SIGNATURE;
@@ -1242,7 +1254,27 @@ static llvm::Constant *buildGlobalBlock(CodeGenModule &CGM,
 
   llvm::Constant *literal = fields.finishAndCreateGlobal(
       "__block_literal_global", blockInfo.BlockAlign,
-      /*constant*/ true, llvm::GlobalVariable::InternalLinkage, AddrSpace);
+      /*constant*/ !IsWindows, llvm::GlobalVariable::InternalLinkage, AddrSpace);
+
+  // Windows does not allow globals to be initialised to point to globals in
+  // different DLLs.  Any such variables must run code to initialise them.
+  if (IsWindows) {
+    auto *Init = llvm::Function::Create(llvm::FunctionType::get(CGM.VoidTy,
+          {}), llvm::GlobalValue::InternalLinkage, ".block_isa_init",
+        &CGM.getModule());
+    llvm::IRBuilder<> b(llvm::BasicBlock::Create(CGM.getLLVMContext(), "entry",
+          Init));
+    b.CreateAlignedStore(CGM.getNSConcreteGlobalBlock(),
+        b.CreateStructGEP(literal, 0), CGM.getPointerAlign().getQuantity());
+    b.CreateRetVoid();
+    // We can't use the normal LLVM global initialisation array, because we
+    // need to specify that this runs early in library initialisation.
+    auto *InitVar = new llvm::GlobalVariable(CGM.getModule(), Init->getType(),
+        /*isConstant*/true, llvm::GlobalValue::InternalLinkage,
+        Init, ".block_isa_init_ptr");
+    InitVar->setSection(".CRT$XCLa");
+    CGM.addUsedGlobal(InitVar);
+  }
 
   // Return a constant of the appropriately-casted type.
   llvm::Type *RequiredType =
@@ -1307,7 +1339,7 @@ CodeGenFunction::GenerateBlockFunction(GlobalDecl GD,
   CurGD = GD;
 
   CurEHLocation = blockInfo.getBlockExpr()->getLocEnd();
-  
+
   BlockInfo = &blockInfo;
 
   // Arrange for local static and local extern declarations to appear
@@ -1577,6 +1609,64 @@ static void findBlockCapturedManagedEntities(
   }
 }
 
+namespace {
+/// Release a __block variable.
+struct CallBlockRelease final : EHScopeStack::Cleanup {
+  Address Addr;
+  BlockFieldFlags FieldFlags;
+  bool LoadBlockVarAddr;
+
+  CallBlockRelease(Address Addr, BlockFieldFlags Flags, bool LoadValue)
+      : Addr(Addr), FieldFlags(Flags), LoadBlockVarAddr(LoadValue) {}
+
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    llvm::Value *BlockVarAddr;
+    if (LoadBlockVarAddr) {
+      BlockVarAddr = CGF.Builder.CreateLoad(Addr);
+      BlockVarAddr = CGF.Builder.CreateBitCast(BlockVarAddr, CGF.VoidPtrTy);
+    } else {
+      BlockVarAddr = Addr.getPointer();
+    }
+
+    CGF.BuildBlockRelease(BlockVarAddr, FieldFlags);
+  }
+};
+} // end anonymous namespace
+
+static void pushCaptureCleanup(BlockCaptureEntityKind CaptureKind,
+                               Address Field, QualType CaptureType,
+                               BlockFieldFlags Flags, bool EHOnly,
+                               CodeGenFunction &CGF) {
+  switch (CaptureKind) {
+  case BlockCaptureEntityKind::CXXRecord:
+  case BlockCaptureEntityKind::ARCWeak:
+  case BlockCaptureEntityKind::NonTrivialCStruct:
+  case BlockCaptureEntityKind::ARCStrong: {
+    if (CaptureType.isDestructedType() &&
+        (!EHOnly || CGF.needsEHCleanup(CaptureType.isDestructedType()))) {
+      CodeGenFunction::Destroyer *Destroyer =
+          CaptureKind == BlockCaptureEntityKind::ARCStrong
+              ? CodeGenFunction::destroyARCStrongImprecise
+              : CGF.getDestroyer(CaptureType.isDestructedType());
+      CleanupKind Kind =
+          EHOnly ? EHCleanup
+                 : CGF.getCleanupKind(CaptureType.isDestructedType());
+      CGF.pushDestroy(Kind, Field, CaptureType, Destroyer, Kind & EHCleanup);
+    }
+    break;
+  }
+  case BlockCaptureEntityKind::BlockObject: {
+    if (!EHOnly || CGF.getLangOpts().Exceptions) {
+      CleanupKind Kind = EHOnly ? EHCleanup : NormalAndEHCleanup;
+      CGF.enterByrefCleanup(Kind, Field, Flags, /*LoadBlockVarAddr*/ true);
+    }
+    break;
+  }
+  case BlockCaptureEntityKind::None:
+    llvm_unreachable("unexpected BlockCaptureEntityKind");
+  }
+}
+
 /// Generate the copy-helper function for a block closure object:
 ///   static void block_copy_helper(block_t *dst, block_t *src);
 /// The runtime will have previously initialized 'dst' by doing a
@@ -1640,6 +1730,7 @@ CodeGenFunction::GenerateCopyHelperFunction(const CGBlockInfo &blockInfo) {
   for (const auto &CopiedCapture : CopiedCaptures) {
     const BlockDecl::Capture &CI = CopiedCapture.CI;
     const CGBlockInfo::Capture &capture = CopiedCapture.Capture;
+    QualType captureType = CI.getVariable()->getType();
     BlockFieldFlags flags = CopiedCapture.Flags;
 
     unsigned index = capture.getIndex();
@@ -1677,9 +1768,11 @@ CodeGenFunction::GenerateCopyHelperFunction(const CGBlockInfo &blockInfo) {
         } else {
           EmitARCRetainNonBlock(srcValue);
 
-          // We don't need this anymore, so kill it.  It's not quite
-          // worth the annoyance to avoid creating it in the first place.
-          cast<llvm::Instruction>(dstField.getPointer())->eraseFromParent();
+          // Unless EH cleanup is required, we don't need this anymore, so kill
+          // it. It's not quite worth the annoyance to avoid creating it in the
+          // first place.
+          if (!needsEHCleanup(captureType.isDestructedType()))
+            cast<llvm::Instruction>(dstField.getPointer())->eraseFromParent();
         }
       } else {
         assert(CopiedCapture.Kind == BlockCaptureEntityKind::BlockObject);
@@ -1707,6 +1800,11 @@ CodeGenFunction::GenerateCopyHelperFunction(const CGBlockInfo &blockInfo) {
         }
       }
     }
+
+    // Ensure that we destroy the copied object if an exception is thrown later
+    // in the helper function.
+    pushCaptureCleanup(CopiedCapture.Kind, dstField, captureType, flags, /*EHOnly*/ true,
+                       *this);
   }
 
   FinishFunction();
@@ -1822,36 +1920,8 @@ CodeGenFunction::GenerateDestroyHelperFunction(const CGBlockInfo &blockInfo) {
     Address srcField =
       Builder.CreateStructGEP(src, capture.getIndex(), capture.getOffset());
 
-    // If the captured record has a destructor then call it.
-    if (DestroyedCapture.Kind == BlockCaptureEntityKind::CXXRecord) {
-      const auto *Dtor =
-          CI.getVariable()->getType()->getAsCXXRecordDecl()->getDestructor();
-      PushDestructorCleanup(Dtor, srcField);
-
-      // If this is a __weak capture, emit the release directly.
-    } else if (DestroyedCapture.Kind == BlockCaptureEntityKind::ARCWeak) {
-      EmitARCDestroyWeak(srcField);
-
-    // Destroy strong objects with a call if requested.
-    } else if (DestroyedCapture.Kind == BlockCaptureEntityKind::ARCStrong) {
-      EmitARCDestroyStrong(srcField, ARCImpreciseLifetime);
-
-    // If this is a C struct that requires non-trivial destruction, emit a call
-    // to its destructor.
-    } else if (DestroyedCapture.Kind ==
-               BlockCaptureEntityKind::NonTrivialCStruct) {
-      QualType varType = CI.getVariable()->getType();
-      pushDestroy(varType.isDestructedType(), srcField, varType);
-
-    // Otherwise we call _Block_object_dispose.  It wouldn't be too
-    // hard to just emit this as a cleanup if we wanted to make sure
-    // that things were done in reverse.
-    } else {
-      assert(DestroyedCapture.Kind == BlockCaptureEntityKind::BlockObject);
-      llvm::Value *value = Builder.CreateLoad(srcField);
-      value = Builder.CreateBitCast(value, VoidPtrTy);
-      BuildBlockRelease(value, flags);
-    }
+    pushCaptureCleanup(DestroyedCapture.Kind, srcField,
+                       CI.getVariable()->getType(), flags, /*EHOnly*/ false, *this);
   }
 
   cleanups.ForceCleanup();
@@ -1931,7 +2001,7 @@ public:
     // variable.
 
     llvm::Value *value = CGF.Builder.CreateLoad(srcField);
-    
+
     llvm::Value *null =
       llvm::ConstantPointerNull::get(cast<llvm::PointerType>(value->getType()));
 
@@ -2103,7 +2173,7 @@ generateByrefCopyHelper(CodeGenFunction &CGF, const BlockByrefInfo &byrefInfo,
                                          "src-object");
 
     generator.emitCopy(CGF, destField, srcField);
-  }  
+  }
 
   CGF.FinishFunction();
 
@@ -2275,7 +2345,7 @@ CodeGenFunction::buildByrefHelpers(llvm::StructType &byrefType,
   BlockFieldFlags flags;
   if (type->isBlockPointerType()) {
     flags |= BLOCK_FIELD_IS_BLOCK;
-  } else if (CGM.getContext().isObjCNSObjectType(type) || 
+  } else if (CGM.getContext().isObjCNSObjectType(type) ||
              type->isObjCObjectPointerType()) {
     flags |= BLOCK_FIELD_IS_OBJECT;
   } else {
@@ -2334,24 +2404,24 @@ const BlockByrefInfo &CodeGenFunction::getBlockByrefInfo(const VarDecl *D) {
   llvm::StructType *byrefType =
     llvm::StructType::create(getLLVMContext(),
                              "struct.__block_byref_" + D->getNameAsString());
-  
+
   QualType Ty = D->getType();
 
   CharUnits size;
   SmallVector<llvm::Type *, 8> types;
-  
+
   // void *__isa;
   types.push_back(Int8PtrTy);
   size += getPointerSize();
-  
+
   // void *__forwarding;
   types.push_back(llvm::PointerType::getUnqual(byrefType));
   size += getPointerSize();
-  
+
   // int32_t __flags;
   types.push_back(Int32Ty);
   size += CharUnits::fromQuantity(4);
-    
+
   // int32_t __size;
   types.push_back(Int32Ty);
   size += CharUnits::fromQuantity(4);
@@ -2362,7 +2432,7 @@ const BlockByrefInfo &CodeGenFunction::getBlockByrefInfo(const VarDecl *D) {
     /// void *__copy_helper;
     types.push_back(Int8PtrTy);
     size += getPointerSize();
-    
+
     /// void *__destroy_helper;
     types.push_back(Int8PtrTy);
     size += getPointerSize();
@@ -2530,30 +2600,10 @@ void CodeGenFunction::BuildBlockRelease(llvm::Value *V, BlockFieldFlags flags) {
   EmitNounwindRuntimeCall(F, args); // FIXME: throwing destructors?
 }
 
-namespace {
-  /// Release a __block variable.
-  struct CallBlockRelease final : EHScopeStack::Cleanup {
-    llvm::Value *Addr;
-    CallBlockRelease(llvm::Value *Addr) : Addr(Addr) {}
-
-    void Emit(CodeGenFunction &CGF, Flags flags) override {
-      // Should we be passing FIELD_IS_WEAK here?
-      CGF.BuildBlockRelease(Addr, BLOCK_FIELD_IS_BYREF);
-    }
-  };
-} // end anonymous namespace
-
-/// Enter a cleanup to destroy a __block variable.  Note that this
-/// cleanup should be a no-op if the variable hasn't left the stack
-/// yet; if a cleanup is required for the variable itself, that needs
-/// to be done externally.
-void CodeGenFunction::enterByrefCleanup(const AutoVarEmission &emission) {
-  // We don't enter this cleanup if we're in pure-GC mode.
-  if (CGM.getLangOpts().getGC() == LangOptions::GCOnly)
-    return;
-
-  EHStack.pushCleanup<CallBlockRelease>(NormalAndEHCleanup,
-                                        emission.Addr.getPointer());
+void CodeGenFunction::enterByrefCleanup(CleanupKind Kind, Address Addr,
+                                        BlockFieldFlags Flags,
+                                        bool LoadBlockVarAddr) {
+  EHStack.pushCleanup<CallBlockRelease>(Kind, Addr, Flags, LoadBlockVarAddr);
 }
 
 /// Adjust the declaration of something from the blocks API.

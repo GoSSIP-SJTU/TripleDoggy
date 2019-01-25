@@ -469,6 +469,9 @@ void visualstudio::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     // their own link.exe which may come first.
     linkPath = FindVisualStudioExecutable(TC, "link.exe");
 
+    if (!TC.FoundMSVCInstall() && !llvm::sys::fs::can_execute(linkPath))
+      C.getDriver().Diag(clang::diag::warn_drv_msvc_not_found);
+
 #ifdef _WIN32
     // When cross-compiling with VS2017 or newer, link.exe expects to have
     // its containing bin directory at the top of PATH, followed by the
@@ -684,8 +687,6 @@ MSVCToolChain::MSVCToolChain(const Driver &D, const llvm::Triple &Triple,
 }
 
 Tool *MSVCToolChain::buildLinker() const {
-  if (VCToolChainPath.empty())
-    getDriver().Diag(clang::diag::warn_drv_msvc_not_found);
   return new tools::visualstudio::Linker(*this);
 }
 
@@ -868,7 +869,7 @@ static bool readFullStringValue(HKEY hkey, const char *valueName,
 }
 #endif
 
-/// \brief Read registry string.
+/// Read registry string.
 /// This also supports a means to look for high-versioned keys by use
 /// of a $VERSION placeholder in the key path.
 /// $VERSION in the key path is a placeholder for the version number,
@@ -991,7 +992,7 @@ static bool getWindows10SDKVersionFromPath(const std::string &SDKPath,
   return !SDKVersion.empty();
 }
 
-/// \brief Get Windows SDK installation directory.
+/// Get Windows SDK installation directory.
 static bool getWindowsSDKDir(std::string &Path, int &Major,
                              std::string &WindowsSDKIncludeVersion,
                              std::string &WindowsSDKLibVersion) {
@@ -1297,6 +1298,7 @@ MSVCToolChain::ComputeEffectiveClangTriple(const ArgList &Args,
 SanitizerMask MSVCToolChain::getSupportedSanitizers() const {
   SanitizerMask Res = ToolChain::getSupportedSanitizers();
   Res |= SanitizerKind::Address;
+  Res &= ~SanitizerKind::CFIMFCall;
   return Res;
 }
 

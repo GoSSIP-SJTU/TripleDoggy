@@ -4,9 +4,6 @@
 
 #define DEFAULT_LOG_FILENAME "/home/loccs/log.txt"
 
-/*
-simple wrapper of file operation.
-*/
 class Log
 {
     llvm::raw_ostream *out;

@@ -427,3 +427,35 @@ namespace DependentTemplateIdWithNoArgs {
   };
   void g() { f<X>(); }
 }
+
+namespace DependentUnresolvedUsingTemplate {
+  template<typename T>
+  struct X : T {
+    using T::foo;
+    void f() { this->template foo(); } // expected-error {{does not refer to a template}}
+    void g() { this->template foo<>(); } // expected-error {{does not refer to a template}}
+    void h() { this->template foo<int>(); } // expected-error {{does not refer to a template}}
+  };
+  struct A { template<typename = int> int foo(); };
+  struct B { int foo(); }; // expected-note 3{{non-template here}}
+  void test(X<A> xa, X<B> xb) {
+    xa.f();
+    xa.g();
+    xa.h();
+    xb.f(); // expected-note {{instantiation of}}
+    xb.g(); // expected-note {{instantiation of}}
+    xb.h(); // expected-note {{instantiation of}}
+  }
+}
+
+namespace PR37680 {
+  template <class a> struct b : a {
+    using a::add;
+    template<int> int add() { return this->template add(0); }
+  };
+  struct a {
+    template<typename T = void> int add(...);
+    void add(int);
+  };
+  int f(b<a> ba) { return ba.add<0>(); }
+}

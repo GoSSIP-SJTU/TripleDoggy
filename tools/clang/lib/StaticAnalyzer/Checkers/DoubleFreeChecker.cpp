@@ -1,16 +1,3 @@
-//==---DoubleFreeChecker.cpp ------------------------------*- C++ -*-==//
-//
-//
-// This file is distributed under the Apache Open Source
-// License. See LICENSE.TXT for details.
-//
-//===----------------------------------------------------------------------===//
-//
-// This checker checks double-free,use after free(UAF),memory leak vulnerabilities.
-//
-//===----------------------------------------------------------------------===//
-
-
 #include "ClangSACheckers.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
@@ -30,28 +17,25 @@ using namespace loc;
 #include "MemFuncsIdentification.h"
 
 namespace {
-typedef SmallVector<SymbolRef, 2> SymbolVector;
+
 
 class DoubleFreeChecker : public Checker<check::PostCall,
                                            check::PreCall,
-                                           check::DeadSymbols,
                                            check::Location,
-                                           check::Bind,
-                                           check::PointerEscape> {
-
+                                           eval::Assume> {
+  std::unique_ptr<BuiltinBug> BT_null;
   std::unique_ptr<BugType> DoubleFreeBugType;
-  std::unique_ptr<BugType> LeakBugType;
   std::unique_ptr<BugType> uafBugType;
-  
+
   void reportDoubleFree(SymbolRef MemDescSym,
                          const CallEvent &Call,
                          CheckerContext &C) const;
-
-  void reportLeaks(ArrayRef<SymbolRef> LeakedMems, CheckerContext &C,
-                   ExplodedNode *ErrNode) const;
+  void reportNullDefBug(ProgramStateRef State, const Stmt *S,
+                                   CheckerContext &C,SymbolRef Sym) const;
+  
   void reportUseAfterFree(SVal mem,const Stmt *stmt,
                                           CheckerContext &C) const;
-  bool guaranteedNotToFreeMem(const CallEvent &Call) const;
+
   mutable MemFuncsUtility MemUtility;
 public:
   DoubleFreeChecker();
@@ -60,240 +44,353 @@ public:
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const;
   
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const;
+  ProgramStateRef evalAssume(ProgramStateRef state, SVal Cond,
+                            bool Assumption) const;
 
-  void checkDeadSymbols(SymbolReaper &SymReaper, CheckerContext &C) const;
+  static void AddDerefSource(raw_ostream &os,
+                             SmallVectorImpl<SourceRange> &Ranges,
+                             const Expr *Ex, const ProgramState *state,
+                             const LocationContext *LCtx,
+                             bool loadedFrom = false);
+  class DoubleFreeBugVisitor final : public BugReporterVisitor {
 
-  void checkBind(SVal Loc, SVal Val, const Stmt *S, CheckerContext &) const ;
-  /// Stop tracking addresses which escape.
-  ProgramStateRef checkPointerEscape(ProgramStateRef State,
-                                    const InvalidatedSymbols &Escaped,
-                                    const CallEvent *Call,
-                                    PointerEscapeKind Kind) const;
+   public:
+  SymbolRef Sym;
+  DoubleFreeBugVisitor(SymbolRef s):Sym(s){}
+  std::shared_ptr<PathDiagnosticPiece> VisitNode(const ExplodedNode *N,
+                                                   const ExplodedNode *PrevN,
+                                                   BugReporterContext &BRC,
+                                                   BugReport &BR) override;
+  void Profile(llvm::FoldingSetNodeID &ID) const override {
+      return;
+    }
+  std::shared_ptr<PathDiagnosticPiece>
+    getEndPath(BugReporterContext &BRC, const ExplodedNode *EndPathNode,
+               BugReport &BR) override {
+      PathDiagnosticLocation L =
+        PathDiagnosticLocation::createEndOfPath(EndPathNode,
+                                                BRC.getSourceManager());
+      // Do not add the statement itself as a range in case of leak.
+      return std::make_shared<PathDiagnosticEventPiece>(L, BR.getDescription(),
+                                                         false);
+    }
+};
+
+
 };
 
 } // end anonymous namespace
 
-SymbolRef gs;
-// record the value of arguments of memory free functions and its corresponding memory region.
-using MyMemRegionRef = const MemRegion *;
-REGISTER_SET_WITH_PROGRAMSTATE(FreedMemRegionSet,MyMemRegionRef)
-REGISTER_SET_WITH_PROGRAMSTATE(FreedMemSymSet,SymbolRef)
-// record the return value of memory allocate functions.
+// The state of the checker is a map from tracked stream symbols to their
+// state. Let's store it in the ProgramState.
+REGISTER_SET_WITH_PROGRAMSTATE(FreedMemSymSet,SymbolRef) 
 REGISTER_SET_WITH_PROGRAMSTATE(AllocMemSymSet,SymbolRef) 
-REGISTER_MAP_WITH_PROGRAMSTATE(ReallocMap,SymbolRef,SVal)    //realloc  free val -> return val
-REGISTER_MAP_WITH_PROGRAMSTATE(ReallocRetValStat,SymbolRef,bool) // realloc return val can be non-zero? true->can  false->can't
+REGISTER_MAP_WITH_PROGRAMSTATE(ReallocMap,SymbolRef,SymbolRef)
+REGISTER_SET_WITH_PROGRAMSTATE(MallocUsedSet,SymbolRef)
+std::shared_ptr<PathDiagnosticPiece> DoubleFreeChecker::DoubleFreeBugVisitor::VisitNode(const ExplodedNode *N,
+                                                   const ExplodedNode *PrevN,
+                                                   BugReporterContext &BRC,
+                                                   BugReport &BR)
+                                                   {
+  ProgramStateRef state = N->getState();
+  ProgramStateRef statePrev = PrevN->getState();
+  const Stmt *S = PathDiagnosticLocation::getStmt(N);
+  if(!S)
+    return nullptr;
+  PathDiagnosticLocation  Pos = PathDiagnosticLocation(S, BRC.getSourceManager(),
+                                 N->getLocationContext());
+  StringRef Msg;
+  StackHintGeneratorForSymbol *StackHint = nullptr;
+  if(state->contains<FreedMemSymSet>(Sym) && !statePrev->contains<FreedMemSymSet>(Sym))
+  {
+    Msg = "memory is freed!";
+    StackHint = new StackHintGeneratorForSymbol(Sym,
+                                                  "function free memory!");
+  }
+  else if(state->contains<AllocMemSymSet>(Sym) && !statePrev->contains<AllocMemSymSet>(Sym))
+  {
+    Msg = "memory is allocated!";
+    StackHint = new StackHintGeneratorForSymbol(Sym,
+                                                  "function allocate memory!");
+  }
+  else{
+    return nullptr;
+  }
+  return std::make_shared<PathDiagnosticEventPiece>(Pos, Msg, true, StackHint);
 
+}
+void
+DoubleFreeChecker::AddDerefSource(raw_ostream &os,
+                                   SmallVectorImpl<SourceRange> &Ranges,
+                                   const Expr *Ex,
+                                   const ProgramState *state,
+                                   const LocationContext *LCtx,
+                                   bool loadedFrom) {
+  Ex = Ex->IgnoreParenLValueCasts();
+  switch (Ex->getStmtClass()) {
+    default:
+      break;
+    case Stmt::DeclRefExprClass: {
+      const DeclRefExpr *DR = cast<DeclRefExpr>(Ex);
+      if (const VarDecl *VD = dyn_cast<VarDecl>(DR->getDecl())) {
+        os << " (" << (loadedFrom ? "loaded from" : "from")
+           << " variable '" <<  VD->getName() << "')";
+        Ranges.push_back(DR->getSourceRange());
+      }
+      break;
+    }
+    case Stmt::MemberExprClass: {
+      const MemberExpr *ME = cast<MemberExpr>(Ex);
+      os << " (" << (loadedFrom ? "loaded from" : "via")
+         << " field '" << ME->getMemberNameInfo() << "')";
+      SourceLocation L = ME->getMemberLoc();
+      Ranges.push_back(SourceRange(L, L));
+      break;
+    }
+    case Stmt::ObjCIvarRefExprClass: {
+      const ObjCIvarRefExpr *IV = cast<ObjCIvarRefExpr>(Ex);
+      os << " (" << (loadedFrom ? "loaded from" : "via")
+         << " ivar '" << IV->getDecl()->getName() << "')";
+      SourceLocation L = IV->getLocation();
+      Ranges.push_back(SourceRange(L, L));
+      break;
+    }
+  }
+}
+void DoubleFreeChecker::reportNullDefBug(ProgramStateRef State, const Stmt *S,
+                                   CheckerContext &C,SymbolRef Sym) const {
+  // Generate an error node.
+  ExplodedNode *N = C.generateNonFatalErrorNode(State);
+  if (!N)
+    return;
+
+  // We know that 'location' cannot be non-null.  This is what
+  // we call an "explicit" null dereference.
+
+
+  SmallString<100> buf;
+  llvm::raw_svector_ostream os(buf);
+
+  SmallVector<SourceRange, 2> Ranges;
+
+  switch (S->getStmtClass()) {
+  case Stmt::ArraySubscriptExprClass: {
+    os << "Array access";
+    const ArraySubscriptExpr *AE = cast<ArraySubscriptExpr>(S);
+    AddDerefSource(os, Ranges, AE->getBase()->IgnoreParenCasts(),
+                   State.get(), N->getLocationContext());
+    os << " results in a null pointer dereference";
+    break;
+  }
+  case Stmt::OMPArraySectionExprClass: {
+    os << "Array access";
+    const OMPArraySectionExpr *AE = cast<OMPArraySectionExpr>(S);
+    AddDerefSource(os, Ranges, AE->getBase()->IgnoreParenCasts(),
+                   State.get(), N->getLocationContext());
+    os << " results in a null pointer dereference";
+    break;
+  }
+  case Stmt::UnaryOperatorClass: {
+    os << "Dereference of null pointer";
+    const UnaryOperator *U = cast<UnaryOperator>(S); 
+    \
+    AddDerefSource(os, Ranges, U->getSubExpr()->IgnoreParens(),
+                   State.get(), N->getLocationContext(), true);
+    break;
+  }
+  case Stmt::MemberExprClass: {
+    const MemberExpr *M = cast<MemberExpr>(S);
+    if (M->isArrow() || bugreporter::isDeclRefExprToReference(M->getBase())) {
+      os << "Access to field '" << M->getMemberNameInfo()
+         << "' results in a dereference of a null pointer";
+      AddDerefSource(os, Ranges, M->getBase()->IgnoreParenCasts(),
+                     State.get(), N->getLocationContext(), true);
+    }
+    break;
+  }
+  case Stmt::ObjCIvarRefExprClass: {
+    const ObjCIvarRefExpr *IV = cast<ObjCIvarRefExpr>(S);
+    os << "Access to instance variable '" << *IV->getDecl()
+       << "' results in a dereference of a null pointer";
+    AddDerefSource(os, Ranges, IV->getBase()->IgnoreParenCasts(),
+                   State.get(), N->getLocationContext(), true);
+    break;
+  }
+  default:
+    break;
+  }
+
+  auto report = llvm::make_unique<BugReport>(
+      *BT_null, buf.empty() ? BT_null->getDescription() : StringRef(buf), N);
+
+  bugreporter::trackNullOrUndefValue(N, bugreporter::getDerefExpr(S), *report);
+
+  for (SmallVectorImpl<SourceRange>::iterator
+       I = Ranges.begin(), E = Ranges.end(); I!=E; ++I)
+    report->addRange(*I);
+  report->addVisitor(llvm::make_unique<DoubleFreeBugVisitor>(Sym));
+  C.emitReport(std::move(report));
+}
 
 DoubleFreeChecker::DoubleFreeChecker()
 {
   // Initialize the bug types.
   DoubleFreeBugType.reset(
       new BugType(this, "wjq-Double free", "Unix Mem Alloc API Error"));
-  LeakBugType.reset(
-      new BugType(this, "wjq-Resource Leak", "Unix Mem Alloc API Error"));
+   BT_null.reset(new BuiltinBug(this, "wjq-Dereference of null pointer"));
   uafBugType.reset(
       new BugType(this,"wjq-use after free","Unix Mem Alloc API Error"));
-  // Sinks are higher importance bugs as well as calls to assert() or exit(0).
-  LeakBugType->setSuppressOnSink(true);
 }
-/*
-record the return value of memory allocate function.
-In particular, the return value and argument of reallocate function 
-should be treated since some CVEs are caused by this way.
-*/
-static bool canBeNonZero(SymbolRef Sym, ProgramStateRef State) {
+bool mustBeZero(ProgramStateRef State,SymbolRef Sym)
+{
+  if(!State || !Sym)
+    return false;
+  ConstraintManager &CMgr = State->getConstraintManager();
+  ConditionTruthVal truth = CMgr.isNull(State, Sym);
+  return truth.isConstrainedTrue();
+}
 
-    ConstraintManager &CMgr = State->getConstraintManager();
-    ConditionTruthVal OpenFailed = CMgr.isNull(State, Sym);
-    return !OpenFailed.isConstrainedTrue();
+bool canBeZero(CheckerContext &C,SymbolRef Sym)
+{
+  if(!Sym)
+    return true;
+  SValBuilder & svalbuilder = C.getSValBuilder();
+  SVal s = svalbuilder.makeSymbolVal(Sym);
+  DefinedOrUnknownSVal val = s.castAs<DefinedOrUnknownSVal>();
+  ProgramStateRef state = C.getState();
+
+  ProgramStateRef notNullState, nullState;
+  std::tie(notNullState, nullState) = state->assume(val);
+  return (bool)nullState;
+}
+
+ProgramStateRef freeMem(ProgramStateRef State,SymbolRef FreedMemDesc)
+{
+  if(!FreedMemDesc)
+      return State;
+  if(State->contains<AllocMemSymSet>(FreedMemDesc))
+  {
+    State = State->remove<AllocMemSymSet>(FreedMemDesc);
+  }
+  State = State->add<FreedMemSymSet>(FreedMemDesc);
+  return State;
+}
+ProgramStateRef allocateMem(ProgramStateRef State,SymbolRef Sym)
+{
+  if(!Sym)
+    return State;
+  if(State->contains<FreedMemSymSet>(Sym))
+  {
+    State = State->remove<FreedMemSymSet>(Sym);
+  }
+  State = State->add<AllocMemSymSet>(Sym);
+  return State;
 }
 void DoubleFreeChecker::checkPostCall(const CallEvent &Call,
                                         CheckerContext &C) const {
-/*
-  if (MemUtility.isMallocFunction(Call))
+  if(!Call.getDecl())
+    return;
+  if(!Call.getDecl()->isFunctionOrFunctionTemplate ())
+    return;                                   
+  if (Call.getDecl()->getAsFunction()->hasBody())
+    return;
+  ProgramStateRef State = C.getState();
+  if (WJQ_FUNC *func = MemUtility.isAllocFunction(Call))
   {
-      // Get the symbolic value corresponding to the memory handle.
+
     SymbolRef MemDesc = Call.getReturnValue().getAsSymbol();
     if (!MemDesc)
       return;
-    ProgramStateRef State = C.getState();
-    State = State->add<AllocMemSymSet>(MemDesc);
-    C.addTransition(State);
+    State = allocateMem(State,MemDesc);
   }
-  */
- 
-  if(MemUtility.isReallocFunction(Call))
+  if (WJQ_FUNC *func = MemUtility.isReallocFunction(Call))
   {
-    ProgramStateRef State = C.getState();
-    SVal realloc_size = Call.getArgSVal(1);
-    SymbolRef freeMemDesc = Call.getArgSVal(0).getAsSymbol();
-    SVal retMemDesc = Call.getReturnValue();
-    SymbolRef retMemDescs = retMemDesc.getAsSymbol();
-    State = State->set<ReallocMap>(freeMemDesc,retMemDesc);
-    State = State->set<ReallocRetValStat>(retMemDescs,true);
-    
-    C.addTransition(State);
-  }
-}
-/*
-if the symbol value being freed is in the freed memory set, report a warning.
-Add the symbol value to the freed memory set, remove the same symbol value from
-allocated memory set.
-*/
 
-void DoubleFreeChecker::checkPreCall(const CallEvent &Call,
-                                       CheckerContext &C) const {
-  
- 
-  if (MemUtility.isFreeFunction(Call))
+      SymbolRef RetMemDesc = Call.getReturnValue().getAsSymbol();
+      SymbolRef FreedMemDesc = Call.getArgSVal(func->pointerarg_index).getAsSymbol();
+      if(!RetMemDesc || !FreedMemDesc)
+        return;
+      State = State->set<ReallocMap>(FreedMemDesc,RetMemDesc);
+      State = allocateMem(State,RetMemDesc);
+      State = freeMem(State,FreedMemDesc);
+      delete func;
+  }
+  if (WJQ_FUNC *func = MemUtility.isFreeFunction(Call))
   {
-      // Get the symbolic value corresponding to the memory handle.
-    SymbolRef MemDesc = Call.getArgSVal(0).getAsSymbol();
+    SymbolRef MemDesc = Call.getArgSVal(func->pointerarg_index).getAsSymbol();
     if (!MemDesc)
       return;
-    ProgramStateRef State = C.getState();
-    
     if(State->contains<FreedMemSymSet>(MemDesc))
     {
       reportDoubleFree(MemDesc,Call,C);
+      return;
     }
-    if(State->contains<ReallocMap>(MemDesc))
-    {
-      //retv_stat == true -> return value can be non zero
-      const SymbolRef retv = State->get<ReallocMap>(MemDesc)->getAsSymbol();
-      bool tmp = canBeNonZero(retv,State);
-      bool retv_stat = State->get<ReallocRetValStat>(retv);
-      if(tmp)
-      {
-          reportDoubleFree(MemDesc,Call,C);
-      }
-    }
-
-/*
-    if(State->contains<AllocMemSymSet>(MemDesc))
-    {
-      State = State->remove<AllocMemSymSet>(MemDesc);
-    }
-*/
-    MyMemRegionRef memReigon = Call.getArgSVal(0).getAsRegion();
-    if(memReigon)
-      State = State->add<FreedMemRegionSet>(memReigon);
-    
-    // Generate the next transition, in which the stream is closed.
-    State = State->add<FreedMemSymSet>(MemDesc);
-    C.addTransition(State);
-  }
-  /*
-  else if(MemUtility.isSpecialFunction(Call))
-  {
-    ProgramStateRef State = C.getState();
-    ProgramStateRef trueState, falseState;
-    SValBuilder &svbuilder = C.getSValBuilder();
-    
-    DefinedOrUnknownSVal s = Call.getArgSVal(0).castAs<DefinedOrUnknownSVal>();
-    std::tie(trueState, falseState) = State->assume(s);
-    if(trueState)
-    {
-        //llvm::outs() << "true state!\n";
-    }
-    if (falseState)
-    {
-        //llvm::outs() << "false state!\n";
-    }
-  }
-  */
-  
-  
-}
-
-
-/*
-Because the symbolic execution engine can not reason about the situation that
-the allocated memory is returned to the caller via the arguments, we manually remove 
-it out of the allocated memory set since the caller may free it outside.
-*/
-void DoubleFreeChecker::checkBind(SVal Loc, SVal Val, const Stmt *S, CheckerContext &C) const 
-{
-  return;
-  ProgramStateRef state = C.getState();
-  SymbolRef MemDesc = Val.getAsSymbol();
-  if(!state->contains<AllocMemSymSet>(MemDesc))
-    return;
-  MyMemRegionRef targetMemRegion = Loc.getAsRegion();
-  //state = state->remove<AllocMemSymSet>(MemDesc);
-  
-  if(!targetMemRegion->hasGlobalsOrParametersStorage()&&
-     !targetMemRegion->hasStackStorage()&&
-     !targetMemRegion->hasStackNonParametersStorage())
-  {
-    state = state->remove<AllocMemSymSet>(MemDesc);
-  }
-
-  C.addTransition(state);
-  return;
-}
-
-void DoubleFreeChecker::checkDeadSymbols(SymbolReaper &SymReaper,
-                                           CheckerContext &C) const 
-{
-  ProgramStateRef State = C.getState();
-  ReallocRetValStatTy reallocastat = State->get<ReallocRetValStat>();
-  for (ReallocRetValStatTy::iterator I = reallocastat.begin(),
-                             E = reallocastat.end(); I != E; ++I) {
-    SymbolRef Sym = I->first;
-    bool IsSymDead = SymReaper.isDead(Sym);
-
-    if(!IsSymDead)
-       continue;
-     llvm::outs() << "hahaha\n";
-    if (!canBeNonZero(Sym,State))
-    {
-       llvm::outs() << "hello\n";
-       State->set<ReallocRetValStat>(Sym,false);
-    }
-     
-
-    // Remove the dead symbol from the streams map.
-    
+    State = freeMem(State,MemDesc);
+    delete func;
   }
   C.addTransition(State);
 }
 
-bool isFreedMem(CheckerContext &C,SVal &s)
-{
-  MyMemRegionRef targetMemRegion = s.getAsRegion();
-  if(!targetMemRegion)
-      return false;
-  ProgramStateRef state = C.getState();
-  FreedMemRegionSetTy freedMems = state->get<FreedMemRegionSet>();
-  for(FreedMemRegionSetTy::iterator I = freedMems.begin(),E = freedMems.end();
-      I!=E; ++I)
-    {
-      MyMemRegionRef storedMemRegion = *I;
-      
-      if(targetMemRegion->isSubRegionOf(storedMemRegion))
+
+void DoubleFreeChecker::checkPreCall(const CallEvent &Call,
+                                       CheckerContext &C) const {
+
+  return;
+}
+ProgramStateRef DoubleFreeChecker::evalAssume(ProgramStateRef state,
+                                              SVal Cond,
+                                              bool Assumption) const {
+                                                
+    ReallocMapTy RM = state->get<ReallocMap>();
+    for (ReallocMapTy::iterator I = RM.begin(), E = RM.end(); I != E; ++I) {
+      if(mustBeZero(state,I.getData()))
       {
-        return true;
+        state = allocateMem(state,I.getKey());
+        state = state->remove<ReallocMap>(I.getKey());
       }
-      
-     /*
-     if(storedMemRegion == targetMemRegion->getBaseRegion())
-     {
-        return true;
-     }
-     */
-       
-    } 
-  return false;     
+    }
+    return state;
+}
+
+bool isFreedMem(CheckerContext &C,SVal &s,SymbolRef *base)
+{
+  SymbolRef Sym = s.getLocSymbolInBase();
+  if(!Sym)
+    return false;
+  if (base)
+    *base = Sym;
+  bool hasSym= C.getState()->contains<FreedMemSymSet>(Sym);
+  return hasSym;
+}
+bool isAllocatedMem(CheckerContext &C,SVal &s,SymbolRef *base)
+{
+  SymbolRef Sym = s.getLocSymbolInBase();
+  if(!Sym)
+    return false;
+  if (base)
+    *base = Sym;
+  bool hasSym= C.getState()->contains<AllocMemSymSet>(Sym);
+  return hasSym;
 }
 void DoubleFreeChecker::checkLocation(SVal Loc, bool IsLoad, const Stmt *S,
                         CheckerContext &C) const
                         {
-  bool isfreed = isFreedMem(C,Loc);
+  SymbolRef base;
+  ProgramStateRef state = C.getState();
+  bool isfreed = isFreedMem(C,Loc,nullptr);
   if(isfreed)
   {
     reportUseAfterFree(Loc,S,C);
   }
+  if(state->contains<MallocUsedSet>(base))
+    return;
+  bool isAllocated = isAllocatedMem(C,Loc,&base);
+  if (isAllocated && canBeZero(C,base))
+  {
+    state->add<MallocUsedSet>(base);
+    reportNullDefBug(C.getState(),S,C,base);
+  }
+
 }
 
 
@@ -311,6 +408,7 @@ void DoubleFreeChecker::reportDoubleFree(SymbolRef MemDescSym,
       "Freeing a previously free mem region", ErrNode);
   R->addRange(Call.getSourceRange());
   R->markInteresting(MemDescSym);
+  R->addVisitor(llvm::make_unique<DoubleFreeBugVisitor>(MemDescSym));
   C.emitReport(std::move(R));
 }
 void DoubleFreeChecker::reportUseAfterFree(SVal mem,
@@ -320,66 +418,17 @@ void DoubleFreeChecker::reportUseAfterFree(SVal mem,
   // If we've already reached this node on another path, return.
   if (!ErrNode)
     return;
-  auto R = llvm::make_unique<BugReport>(*uafBugType,
+  auto R = llvm::make_unique<BugReport>(*DoubleFreeBugType,
       "using a freed memory", ErrNode);
   R->addRange(stmt->getSourceRange());
   R->markInteresting(mem);
+  
+  R->addVisitor(llvm::make_unique<DoubleFreeBugVisitor>(mem.getAsSymbol()));
   C.emitReport(std::move(R));
                                           
 }
 
-void DoubleFreeChecker::reportLeaks(ArrayRef<SymbolRef> LeakedMems,
-                                      CheckerContext &C,
-                                      ExplodedNode *ErrNode) const {
-  // Attach bug reports to the leak node.
-  // TODO: Identify the leaked file descriptor.
-  for (SymbolRef LeakedMem : LeakedMems) {
-    auto R = llvm::make_unique<BugReport>(*LeakBugType,
-        "allocate memory is never freed; potential resource leak", ErrNode);
-    R->markInteresting(LeakedMem);
-    C.emitReport(std::move(R));
-  }
-}
 
-bool DoubleFreeChecker::guaranteedNotToFreeMem(const CallEvent &Call) const{
-  // If it's not in a system header, assume it might close a file.
-  if (!Call.isInSystemHeader())
-    return false;
-
-  // Handle cases where we know a buffer's /address/ can escape.
-  if (Call.argumentsMayEscape())
-    return false;
-
-  // Note, even though fclose closes the file, we do not list it here
-  // since the checker is modeling the call.
-
-  return true;
-}
-
-// If the pointer we are tracking escaped, do not track the symbol as
-// we cannot reason about it anymore.
-ProgramStateRef
-DoubleFreeChecker::checkPointerEscape(ProgramStateRef State,
-                                        const InvalidatedSymbols &Escaped,
-                                        const CallEvent *Call,
-                                        PointerEscapeKind Kind) const {
-  return State;
-  // If we know that the call cannot close a file, there is nothing to do.
-  if (Kind == PSK_EscapeOnBind && guaranteedNotToFreeMem(*Call)) {
-    return State;
-  }
-
-  for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
-                                          E = Escaped.end();
-                                          I != E; ++I) {
-    SymbolRef Sym = *I;
-
-    // The symbol escaped. Optimistically, assume that the corresponding file
-    // handle will be closed somewhere else.
-    State = State->remove<FreedMemSymSet>(Sym);
-  }
-  return State;
-} 
 
 void ento::registerDoubleFreeChecker(CheckerManager &mgr) {
   mgr.registerChecker<DoubleFreeChecker>();

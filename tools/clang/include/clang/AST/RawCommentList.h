@@ -101,8 +101,10 @@ public:
   }
 
   SourceRange getSourceRange() const LLVM_READONLY { return Range; }
-  SourceLocation getLocStart() const LLVM_READONLY { return Range.getBegin(); }
-  SourceLocation getLocEnd() const LLVM_READONLY { return Range.getEnd(); }
+  SourceLocation getLocStart() const LLVM_READONLY { return getBeginLoc(); }
+  SourceLocation getBeginLoc() const LLVM_READONLY { return Range.getBegin(); }
+  SourceLocation getLocEnd() const LLVM_READONLY { return getEndLoc(); }
+  SourceLocation getEndLoc() const LLVM_READONLY { return Range.getEnd(); }
 
   const char *getBriefText(const ASTContext &Context) const {
     if (BriefTextValid)
@@ -110,6 +112,30 @@ public:
 
     return extractBriefText(Context);
   }
+
+  /// Returns sanitized comment text, suitable for presentation in editor UIs.
+  /// E.g. will transform:
+  ///     // This is a long multiline comment.
+  ///     //   Parts of it  might be indented.
+  ///     /* The comments styles might be mixed. */
+  ///  into
+  ///     "This is a long multiline comment.\n"
+  ///     "  Parts of it  might be indented.\n"
+  ///     "The comments styles might be mixed."
+  /// Also removes leading indentation and sanitizes some common cases:
+  ///     /* This is a first line.
+  ///      *   This is a second line. It is indented.
+  ///      * This is a third line. */
+  /// and
+  ///     /* This is a first line.
+  ///          This is a second line. It is indented.
+  ///     This is a third line. */
+  /// will both turn into:
+  ///     "This is a first line.\n"
+  ///     "  This is a second line. It is indented.\n"
+  ///     "This is a third line."
+  std::string getFormattedText(const SourceManager &SourceMgr,
+                               DiagnosticsEngine &Diags) const;
 
   /// Parse the comment, assuming it is attached to decl \c D.
   comments::FullComment *parse(const ASTContext &Context,
@@ -132,7 +158,7 @@ private:
   bool IsTrailingComment : 1;
   bool IsAlmostTrailingComment : 1;
 
-  /// \brief Constructor for AST deserialization.
+  /// Constructor for AST deserialization.
   RawComment(SourceRange SR, CommentKind K, bool IsTrailingComment,
              bool IsAlmostTrailingComment) :
     Range(SR), RawTextValid(false), BriefTextValid(false), Kind(K),
@@ -147,7 +173,7 @@ private:
   friend class ASTReader;
 };
 
-/// \brief Compare comments' source locations.
+/// Compare comments' source locations.
 template<>
 class BeforeThanCompare<RawComment> {
   const SourceManager &SM;
@@ -164,7 +190,7 @@ public:
   }
 };
 
-/// \brief This class represents all comments included in the translation unit,
+/// This class represents all comments included in the translation unit,
 /// sorted in order of appearance in the translation unit.
 class RawCommentList {
 public:

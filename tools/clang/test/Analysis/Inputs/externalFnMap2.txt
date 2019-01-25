@@ -1,0 +1,6 @@
+c:@F@getkey ctu-other.c.ast
+c:@F@g ctu-other.c.ast
+c:@F@f ctu-other.c.ast
+c:@F@enumcheck ctu-other.c.ast
+c:@F@ident_implicit ctu-other.c.ast
+c:@F@struct_in_proto ctu-other.c.ast

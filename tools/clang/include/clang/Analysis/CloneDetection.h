@@ -122,7 +122,8 @@ public:
   /// Returns the start sourcelocation of the first statement in this sequence.
   ///
   /// This method should only be called on a non-empty StmtSequence object.
-  SourceLocation getStartLoc() const;
+  SourceLocation getStartLoc() const LLVM_READONLY { return getBeginLoc(); }
+  SourceLocation getBeginLoc() const;
 
   /// Returns the end sourcelocation of the last statement in this sequence.
   ///
@@ -332,7 +333,7 @@ struct FilenamePatternConstraint {
   StringRef IgnoredFilesPattern;
   std::shared_ptr<llvm::Regex> IgnoredFilesRegex;
 
-  FilenamePatternConstraint(StringRef IgnoredFilesPattern) 
+  FilenamePatternConstraint(StringRef IgnoredFilesPattern)
       : IgnoredFilesPattern(IgnoredFilesPattern) {
     IgnoredFilesRegex = std::make_shared<llvm::Regex>("^(" +
         IgnoredFilesPattern.str() + "$)");

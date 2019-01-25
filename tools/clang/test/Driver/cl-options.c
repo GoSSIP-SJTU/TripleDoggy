@@ -565,8 +565,15 @@
 // (/Zs is for syntax-only, -Werror makes it fail hard on unknown options)
 // RUN: %clang_cl \
 // RUN:     --driver-mode=cl \
+// RUN:     -fblocks \
+// RUN:     -fno-blocks \
+// RUN:     -fbuiltin \
+// RUN:     -fno-builtin \
+// RUN:     -fno-builtin-strcpy \
 // RUN:     -fcolor-diagnostics \
 // RUN:     -fno-color-diagnostics \
+// RUN:     -fcoverage-mapping \
+// RUN:     -fno-coverage-mapping \
 // RUN:     -fdiagnostics-color \
 // RUN:     -fno-diagnostics-color \
 // RUN:     -fdiagnostics-parseable-fixits \
@@ -589,6 +596,7 @@
 // RUN:     -flimit-debug-info \
 // RUN:     -flto \
 // RUN:     -fmerge-all-constants \
+// RUN:     -no-canonical-prefixes \
 // RUN:     --version \
 // RUN:     -Werror /Zs -- %s 2>&1
 

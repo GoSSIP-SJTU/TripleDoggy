@@ -17,10 +17,16 @@
 // CHECK-DAG: @b = global i32 15,
 // CHECK-DAG: @d = global i32 0,
 // CHECK-DAG: @c = external global i32,
+// CHECK-DAG: @globals = global %struct.S zeroinitializer,
+// CHECK-DAG: [[STAT:@.+stat]] = internal global %struct.S zeroinitializer,
+// CHECK-DAG: [[STAT_REF:@.+]] = internal constant %struct.S* [[STAT]]
+// CHECK-DAG: @llvm.used = appending global [2 x i8*] [i8* bitcast (void ()* @__omp_offloading__{{.+}}_globals_l[[@LINE+42]]_ctor to i8*), i8* bitcast (void ()* @__omp_offloading__{{.+}}_stat_l[[@LINE+43]]_ctor to i8*)],
+// CHECK-DAG: @llvm.compiler.used = appending global [1 x i8*] [i8* bitcast (%struct.S** [[STAT_REF]] to i8*)],
 
 // CHECK-DAG: define {{.*}}i32 @{{.*}}{{foo|bar|baz2|baz3|FA|f_method}}{{.*}}()
 // CHECK-DAG: define {{.*}}void @{{.*}}TemplateClass{{.*}}(%class.TemplateClass* %{{.*}})
 // CHECK-DAG: define {{.*}}i32 @{{.*}}TemplateClass{{.*}}f_method{{.*}}(%class.TemplateClass* %{{.*}})
+// CHECK-DAG: define {{.*}}void @__omp_offloading__{{.*}}_globals_l[[@LINE+36]]_ctor()
 
 #ifndef HEADER
 #define HEADER
@@ -56,6 +62,8 @@ struct S {
 int foo() { return 0; }
 int b = 15;
 int d;
+S globals(d);
+static S stat(d);
 #pragma omp end declare target
 int c;
 
@@ -64,7 +72,7 @@ int bar() { return 1 + foo() + bar() + baz1() + baz2(); }
 int maini1() {
   int a;
   static long aa = 32;
-// CHECK-DAG: define void @__omp_offloading_{{.*}}maini1{{.*}}_l[[@LINE+1]](i32* dereferenceable{{.*}}, i64 {{.*}}, i64 {{.*}})
+// CHECK-DAG: define weak void @__omp_offloading_{{.*}}maini1{{.*}}_l[[@LINE+1]](i32* dereferenceable{{.*}}, i64 {{.*}}, i64 {{.*}})
 #pragma omp target map(tofrom \
                        : a, b)
   {
@@ -77,11 +85,25 @@ int maini1() {
 
 int baz3() { return 2 + baz2(); }
 int baz2() {
-// CHECK-DAG: define void @__omp_offloading_{{.*}}baz2{{.*}}_l[[@LINE+1]](i64 {{.*}})
-#pragma omp target
+// CHECK-DAG: define weak void @__omp_offloading_{{.*}}baz2{{.*}}_l[[@LINE+1]](i64 {{.*}})
+#pragma omp target parallel
   ++c;
   return 2 + baz3();
 }
+
+extern int create() throw();
+
+static __typeof(create) __t_create __attribute__((__weakref__("__create")));
+
+int baz5() {
+  bool a;
+// CHECK-DAG: define weak void @__omp_offloading_{{.*}}baz5{{.*}}_l[[@LINE+1]](i64 {{.*}})
+#pragma omp target
+  a = __extension__(void *) & __t_create != 0;
+  return a;
+}
+
+// CHECK-DAG: declare extern_weak signext i32 @__create()
 
 // CHECK-NOT: define {{.*}}{{baz1|baz4|maini1}}
 #endif // HEADER

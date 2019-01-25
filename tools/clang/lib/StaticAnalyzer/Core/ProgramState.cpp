@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState.h"
 #include "clang/Analysis/CFG.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
@@ -336,9 +337,8 @@ ProgramStateRef ProgramState::assumeInBound(DefinedOrUnknownSVal Idx,
 
   // Get the offset: the minimum value of the array index type.
   BasicValueFactory &BVF = svalBuilder.getBasicValueFactory();
-  // FIXME: This should be using ValueManager::ArrayindexTy...somehow.
   if (indexTy.isNull())
-    indexTy = Ctx.IntTy;
+    indexTy = svalBuilder.getArrayIndexType();
   nonloc::ConcreteInt Min(BVF.getMinValue(indexTy));
 
   // Adjust the index.
@@ -493,6 +493,10 @@ void ProgramState::printTaint(raw_ostream &Out,
 
 void ProgramState::dumpTaint() const {
   printTaint(llvm::errs());
+}
+
+AnalysisManager& ProgramState::getAnalysisManager() const {
+  return stateMgr->getOwningEngine()->getAnalysisManager();
 }
 
 //===----------------------------------------------------------------------===//

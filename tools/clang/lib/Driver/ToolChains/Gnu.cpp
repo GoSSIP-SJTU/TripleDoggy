@@ -535,6 +535,10 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // Add OpenMP offloading linker script args if required.
   AddOpenMPLinkerScript(getToolChain(), C, Output, Inputs, Args, CmdArgs, JA);
 
+  // Add HIP offloading linker script args if required.
+  AddHIPLinkerScript(getToolChain(), C, Output, Inputs, Args, CmdArgs, JA,
+                     *this);
+
   C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
 }
 
@@ -703,11 +707,10 @@ void tools::gnutools::Assembler::ConstructJob(Compilation &C,
     if (ABIName != "64" && !Args.hasArg(options::OPT_mno_abicalls))
       CmdArgs.push_back("-call_nonpic");
 
-    if (getToolChain().getArch() == llvm::Triple::mips ||
-        getToolChain().getArch() == llvm::Triple::mips64)
-      CmdArgs.push_back("-EB");
-    else
+    if (getToolChain().getTriple().isLittleEndian())
       CmdArgs.push_back("-EL");
+    else
+      CmdArgs.push_back("-EB");
 
     if (Arg *A = Args.getLastArg(options::OPT_mnan_EQ)) {
       if (StringRef(A->getValue()) == "2008")
@@ -829,14 +832,6 @@ static void addMultilibFlag(bool Enabled, const char *const Flag,
 
 static bool isArmOrThumbArch(llvm::Triple::ArchType Arch) {
   return Arch == llvm::Triple::arm || Arch == llvm::Triple::thumb;
-}
-
-static bool isMips32(llvm::Triple::ArchType Arch) {
-  return Arch == llvm::Triple::mips || Arch == llvm::Triple::mipsel;
-}
-
-static bool isMips64(llvm::Triple::ArchType Arch) {
-  return Arch == llvm::Triple::mips64 || Arch == llvm::Triple::mips64el;
 }
 
 static bool isMipsEL(llvm::Triple::ArchType Arch) {
@@ -1301,8 +1296,8 @@ bool clang::driver::findMIPSMultilibs(const Driver &D,
   llvm::Triple::ArchType TargetArch = TargetTriple.getArch();
 
   Multilib::flags_list Flags;
-  addMultilibFlag(isMips32(TargetArch), "m32", Flags);
-  addMultilibFlag(isMips64(TargetArch), "m64", Flags);
+  addMultilibFlag(TargetTriple.isMIPS32(), "m32", Flags);
+  addMultilibFlag(TargetTriple.isMIPS64(), "m64", Flags);
   addMultilibFlag(isMips16(Args), "mips16", Flags);
   addMultilibFlag(CPUName == "mips32", "march=mips32", Flags);
   addMultilibFlag(CPUName == "mips32r2" || CPUName == "mips32r3" ||
@@ -1545,7 +1540,7 @@ static bool findBiarchMultilibs(const Driver &D,
 /// all subcommands; this relies on gcc translating the majority of
 /// command line options.
 
-/// \brief Less-than for GCCVersion, implementing a Strict Weak Ordering.
+/// Less-than for GCCVersion, implementing a Strict Weak Ordering.
 bool Generic_GCC::GCCVersion::isOlderThan(int RHSMajor, int RHSMinor,
                                           int RHSPatch,
                                           StringRef RHSPatchSuffix) const {
@@ -1579,7 +1574,7 @@ bool Generic_GCC::GCCVersion::isOlderThan(int RHSMajor, int RHSMinor,
   return false;
 }
 
-/// \brief Parse a GCCVersion object out of a string of text.
+/// Parse a GCCVersion object out of a string of text.
 ///
 /// This is the primary means of forming GCCVersion objects.
 /*static*/
@@ -1637,7 +1632,7 @@ static llvm::StringRef getGCCToolchainDir(const ArgList &Args) {
   return GCC_INSTALL_PREFIX;
 }
 
-/// \brief Initialize a GCCInstallationDetector from the driver.
+/// Initialize a GCCInstallationDetector from the driver.
 ///
 /// This performs all of the autodetection and sets up the various paths.
 /// Once constructed, a GCCInstallationDetector is essentially immutable.
@@ -1839,7 +1834,8 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
       "x86_64-pc-linux-gnu",    "x86_64-redhat-linux6E",
       "x86_64-redhat-linux",    "x86_64-suse-linux",
       "x86_64-manbo-linux-gnu", "x86_64-linux-gnu",
-      "x86_64-slackware-linux", "x86_64-unknown-linux"};
+      "x86_64-slackware-linux", "x86_64-unknown-linux",
+      "x86_64-amazon-linux"};
   static const char *const X32LibDirs[] = {"/libx32"};
   static const char *const X86LibDirs[] = {"/lib32", "/lib"};
   static const char *const X86Triples[] = {
@@ -1881,7 +1877,8 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
 
   static const char *const RISCV32LibDirs[] = {"/lib", "/lib32"};
   static const char *const RISCVTriples[] = {"riscv32-unknown-linux-gnu",
-                                             "riscv64-unknown-linux-gnu"};
+                                             "riscv64-unknown-linux-gnu",
+                                             "riscv32-unknown-elf"};
 
   static const char *const SPARCv8LibDirs[] = {"/lib32", "/lib"};
   static const char *const SPARCv8Triples[] = {"sparc-linux-gnu",
@@ -2147,7 +2144,7 @@ bool Generic_GCC::GCCInstallationDetector::ScanGCCForMultilibs(
   if (isArmOrThumbArch(TargetArch) && TargetTriple.isAndroid()) {
     // It should also work without multilibs in a simplified toolchain.
     findAndroidArmMultilibs(D, TargetTriple, Path, Args, Detected);
-  } else if (tools::isMipsArch(TargetArch)) {
+  } else if (TargetTriple.isMIPS()) {
     if (!findMIPSMultilibs(D, TargetTriple, Path, Args, Detected))
       return false;
   } else if (isRISCV(TargetArch)) {
@@ -2192,7 +2189,8 @@ void Generic_GCC::GCCInstallationDetector::ScanLibDirForGCCTriple(
       // this on Freescale triples, though, since some systems put a *lot* of
       // files in that location, not just GCC installation data.
       {CandidateTriple.str(), "..",
-       TargetTriple.getVendor() == llvm::Triple::Freescale},
+       TargetTriple.getVendor() == llvm::Triple::Freescale ||
+       TargetTriple.getVendor() == llvm::Triple::OpenEmbedded},
 
       // Natively multiarch systems sometimes put the GCC triple-specific
       // directory within their multiarch lib directory, resulting in the
@@ -2417,11 +2415,13 @@ bool Generic_GCC::IsIntegratedAssemblerDefault() const {
     return true;
   case llvm::Triple::mips64:
   case llvm::Triple::mips64el:
-    // Enabled for Debian and Android mips64/mipsel, as they can precisely
-    // identify the ABI in use (Debian) or only use N64 for MIPS64 (Android).
-    // Other targets are unable to distinguish N32 from N64.
+    // Enabled for Debian, Android, FreeBSD and OpenBSD mips64/mipsel, as they
+    // can precisely identify the ABI in use (Debian) or only use N64 for MIPS64
+    // (Android). Other targets are unable to distinguish N32 from N64.
     if (getTriple().getEnvironment() == llvm::Triple::GNUABI64 ||
-        getTriple().isAndroid())
+        getTriple().isAndroid() ||
+        getTriple().isOSFreeBSD() ||
+        getTriple().isOSOpenBSD())
       return true;
     return false;
   default:
@@ -2461,7 +2461,7 @@ Generic_GCC::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
   // FIXME: If we have a valid GCCInstallation, use it.
 }
 
-/// \brief Helper to add the variant paths of a libstdc++ installation.
+/// Helper to add the variant paths of a libstdc++ installation.
 bool Generic_GCC::addLibStdCXXIncludePaths(
     Twine Base, Twine Suffix, StringRef GCCTriple, StringRef GCCMultiarchTriple,
     StringRef TargetMultiarchTriple, Twine IncludeSuffix,
@@ -2546,6 +2546,8 @@ void Generic_ELF::addClangTargetOptions(const ArgList &DriverArgs,
   bool UseInitArrayDefault =
       getTriple().getArch() == llvm::Triple::aarch64 ||
       getTriple().getArch() == llvm::Triple::aarch64_be ||
+      (getTriple().getOS() == llvm::Triple::FreeBSD &&
+       getTriple().getOSMajorVersion() >= 12) ||
       (getTriple().getOS() == llvm::Triple::Linux &&
        ((!GCCInstallation.isValid() || !V.isOlderThan(4, 7, 0)) ||
         getTriple().isAndroid())) ||

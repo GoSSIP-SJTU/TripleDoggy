@@ -15,6 +15,7 @@
 #ifndef LLVM_CLANG_CROSSTU_CROSSTRANSLATIONUNIT_H
 #define LLVM_CLANG_CROSSTU_CROSSTRANSLATIONUNIT_H
 
+#include "clang/AST/ASTImporterLookupTable.h"
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -41,7 +42,9 @@ enum class index_error_code {
   missing_definition,
   failed_import,
   failed_to_get_external_ast,
-  failed_to_generate_usr
+  failed_to_generate_usr,
+  triple_mismatch,
+  lang_mismatch
 };
 
 class IndexError : public llvm::ErrorInfo<IndexError> {
@@ -62,7 +65,7 @@ private:
   int LineNo;
 };
 
-/// \brief This function parses an index file that determines which
+/// This function parses an index file that determines which
 ///        translation unit contains which definition.
 ///
 /// The index file format is the following:
@@ -75,7 +78,7 @@ parseCrossTUIndex(StringRef IndexPath, StringRef CrossTUDir);
 
 std::string createCrossTUIndexString(const llvm::StringMap<std::string> &Index);
 
-/// \brief This class is used for tools that requires cross translation
+/// This class is used for tools that requires cross translation
 ///        unit capability.
 ///
 /// This class can load function definitions from external AST files.
@@ -90,7 +93,7 @@ public:
   CrossTranslationUnitContext(CompilerInstance &CI);
   ~CrossTranslationUnitContext();
 
-  /// \brief This function loads a function definition from an external AST
+  /// This function loads a function definition from an external AST
   ///        file and merge it into the original AST.
   ///
   /// This method should only be used on functions that have no definitions in
@@ -108,9 +111,9 @@ public:
   /// Note that the AST files should also be in the \p CrossTUDir.
   llvm::Expected<const FunctionDecl *>
   getCrossTUDefinition(const FunctionDecl *FD, StringRef CrossTUDir,
-                       StringRef IndexName);
+                       StringRef IndexName, bool DisplayCTUProgress = false);
 
-  /// \brief This function loads a function definition from an external AST
+  /// This function loads a function definition from an external AST
   ///        file.
   ///
   /// A function definition with the same declaration will be looked up in the
@@ -124,22 +127,24 @@ public:
   /// Note that the AST files should also be in the \p CrossTUDir.
   llvm::Expected<ASTUnit *> loadExternalAST(StringRef LookupName,
                                             StringRef CrossTUDir,
-                                            StringRef IndexName);
+                                            StringRef IndexName,
+                                            bool DisplayCTUProgress = false);
 
-  /// \brief This function merges a definition from a separate AST Unit into
+  /// This function merges a definition from a separate AST Unit into
   ///        the current one which was created by the compiler instance that
   ///        was passed to the constructor.
   ///
   /// \return Returns the resulting definition or an error.
   llvm::Expected<const FunctionDecl *> importDefinition(const FunctionDecl *FD);
 
-  /// \brief Get a name to identify a function.
+  /// Get a name to identify a function.
   static std::string getLookupName(const NamedDecl *ND);
 
-  /// \brief Emit diagnostics for the user for potential configuration errors.
+  /// Emit diagnostics for the user for potential configuration errors.
   void emitCrossTUDiagnostics(const IndexError &IE);
 
 private:
+  void lazyInitLookupTable(TranslationUnitDecl *ToTU);
   ASTImporter &getOrCreateASTImporter(ASTContext &From);
   const FunctionDecl *findFunctionInDeclContext(const DeclContext *DC,
                                                 StringRef LookupFnName);
@@ -151,6 +156,7 @@ private:
       ASTUnitImporterMap;
   CompilerInstance &CI;
   ASTContext &Context;
+  std::unique_ptr<ASTImporterLookupTable> LookupTable;
 };
 
 } // namespace cross_tu

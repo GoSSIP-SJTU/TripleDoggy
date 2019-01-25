@@ -1269,6 +1269,12 @@ are listed below.
    devirtualization and virtual constant propagation, for classes with
    :doc:`hidden LTO visibility <LTOVisibility>`. Requires ``-flto``.
 
+.. option:: -fforce-emit-vtables
+
+   In order to improve devirtualization, forces emitting of vtables even in
+   modules where it isn't necessary. It causes more inline virtual functions
+   to be emitted.
+
 .. option:: -fno-assume-sane-operator-new
 
    Don't assume that the C++'s new operator is sane.
@@ -1376,6 +1382,15 @@ are listed below.
         // value of -fmax-type-align.
       }
 
+.. option:: -faddrsig, -fno-addrsig
+
+   Controls whether Clang emits an address-significance table into the object
+   file. Address-significance tables allow linkers to implement `safe ICF
+   <https://research.google.com/pubs/archive/36912.pdf>`_ without the false
+   positives that can result from other implementation techniques such as
+   relocation scanning. Address-significance tables are enabled by default
+   on ELF targets when using the integrated assembler. This flag currently
+   only has an effect on ELF targets.
 
 Profile Guided Optimization
 ---------------------------
@@ -1735,11 +1750,11 @@ profile creation and use.
 .. option:: -fprofile-generate[=<dirname>]
 
   The ``-fprofile-generate`` and ``-fprofile-generate=`` flags will use
-  an alterantive instrumentation method for profile generation. When
+  an alternative instrumentation method for profile generation. When
   given a directory name, it generates the profile file
   ``default_%m.profraw`` in the directory named ``dirname`` if specified.
   If ``dirname`` does not exist, it will be created at runtime. ``%m`` specifier
-  will be substibuted with a unique id documented in step 2 above. In other words,
+  will be substituted with a unique id documented in step 2 above. In other words,
   with ``-fprofile-generate[=<dirname>]`` option, the "raw" profile data automatic
   merging is turned on by default, so there will no longer any risk of profile
   clobbering from different running processes.  For example,
@@ -2110,10 +2125,15 @@ Controlling implementation limits
   Sets the limit for recursive constexpr function invocations to N.  The
   default is 512.
 
+.. option:: -fconstexpr-steps=N
+
+  Sets the limit for the number of full-expressions evaluated in a single
+  constant expression evaluation.  The default is 1048576.
+
 .. option:: -ftemplate-depth=N
 
   Sets the limit for recursively nested template instantiations to N.  The
-  default is 256.
+  default is 1024.
 
 .. option:: -foperator-arrow-depth=N
 
@@ -2135,13 +2155,8 @@ Objective-C++ Language Features
 OpenMP Features
 ===============
 
-Clang supports all OpenMP 3.1 directives and clauses.  In addition, some
-features of OpenMP 4.0 are supported.  For example, ``#pragma omp simd``,
-``#pragma omp for simd``, ``#pragma omp parallel for simd`` directives, extended
-set of atomic constructs, ``proc_bind`` clause for all parallel-based
-directives, ``depend`` clause for ``#pragma omp task`` directive (except for
-array sections), ``#pragma omp cancel`` and ``#pragma omp cancellation point``
-directives, and ``#pragma omp taskgroup`` directive.
+Clang supports all OpenMP 4.5 directives and clauses. See :doc:`OpenMPSupport`
+for additional details.
 
 Use `-fopenmp` to enable OpenMP. Support for OpenMP can be disabled with
 `-fno-openmp`.
@@ -2696,16 +2711,17 @@ Command Prompt or a regular Command Prompt where the environment has been set
 up using e.g. `vcvarsall.bat <http://msdn.microsoft.com/en-us/library/f2ccy3wt.aspx>`_.
 
 clang-cl can also be used from inside Visual Studio by selecting the LLVM
-Platform Toolset. The toolset is installed by the LLVM installer, which can be
-downloaded from the `LLVM release <http://releases.llvm.org/download.html>`_ or
-`snapshot build <http://llvm.org/builds/>`_ web pages. To use the toolset,
-select a project in Solution Explorer, open its Property Page (Alt+F7), and in
-the "General" section of "Configuration Properties" change "Platform Toolset"
-to e.g. LLVM-vs2014.
+Platform Toolset. The toolset is not part of the installer, but may be installed
+separately from the
+`Visual Studio Marketplace <https://marketplace.visualstudio.com/items?itemName=LLVMExtensions.llvm-toolchain>`_.
+To use the toolset, select a project in Solution Explorer, open its Property
+Page (Alt+F7), and in the "General" section of "Configuration Properties"
+change "Platform Toolset" to LLVM.  Doing so enables an additional Property
+Page for selecting the clang-cl executable to use for builds.
 
 To use the toolset with MSBuild directly, invoke it with e.g.
-``/p:PlatformToolset=LLVM-vs2014``. This allows trying out the clang-cl
-toolchain without modifying your project files.
+``/p:PlatformToolset=LLVM``. This allows trying out the clang-cl toolchain
+without modifying your project files.
 
 It's also possible to point MSBuild at clang-cl without changing toolset by
 passing ``/p:CLToolPath=c:\llvm\bin /p:CLToolExe=clang-cl.exe``.
@@ -2714,7 +2730,7 @@ When using CMake and the Visual Studio generators, the toolset can be set with t
 
   ::
 
-    cmake -G"Visual Studio 15 2017" -T LLVM-vs2014 ..
+    cmake -G"Visual Studio 15 2017" -T LLVM ..
 
 When using CMake with the Ninja generator, set the ``CMAKE_C_COMPILER`` and
 ``CMAKE_CXX_COMPILER`` variables to clang-cl:
@@ -2763,6 +2779,7 @@ Execute ``clang-cl /?`` to see a list of supported options:
       /Brepro                 Emit an object file which can be reproduced over time
       /C                      Don't discard comments when preprocessing
       /c                      Compile only
+      /d1PP                   Retain macro definitions in /E mode
       /d1reportAllClassLayout Dump record layout information
       /diagnostics:caret      Enable caret and column diagnostics (on by default)
       /diagnostics:classic    Disable column and caret diagnostics
@@ -2796,6 +2813,7 @@ Execute ``clang-cl /?`` to see a list of supported options:
       /GS-                    Disable buffer security check
       /GS                     Enable buffer security check
       /Gs<value>              Set stack probe size
+      /guard:<value>          Enable Control Flow Guard with /guard:cf
       /Gv                     Set __vectorcall as a default calling convention
       /Gw-                    Don't put each data item in its own section
       /Gw                     Put each data item in its own section
@@ -2851,6 +2869,7 @@ Execute ``clang-cl /?`` to see a list of supported options:
       /WX-                    Do not treat warnings as errors
       /WX                     Treat warnings as errors
       /w                      Disable all warnings
+      /X                      Don't add %INCLUDE% to the include search path
       /Y-                     Disable precompiled headers, overrides /Yc and /Yu
       /Yc<filename>           Generate a pch file for all code up to and including <filename>
       /Yu<filename>           Load a pch file and use it instead of all code up to and including <filename>
@@ -2874,8 +2893,15 @@ Execute ``clang-cl /?`` to see a list of supported options:
     OPTIONS:
       -###                    Print (but do not run) the commands to run for this compilation
       --analyze               Run the static analyzer
+      -faddrsig               Emit an address-significance table
       -fansi-escape-codes     Use ANSI escape codes for diagnostics
+      -fblocks                Enable the 'blocks' language feature
+      -fcf-protection=<value> Instrument control-flow architecture protection. Options: return, branch, full, none.
+      -fcf-protection         Enable cf-protection in 'full' mode
       -fcolor-diagnostics     Use colors in diagnostics
+      -fcomplete-member-pointers
+                              Require member pointer base types to be complete if they would be significant under the Microsoft ABI
+      -fcoverage-mapping      Generate coverage mapping to enable code coverage analysis
       -fdebug-macro           Emit macro debug information
       -fdelayed-template-parsing
                               Parse templated function definitions at the end of the translation unit
@@ -2885,6 +2911,7 @@ Execute ``clang-cl /?`` to see a list of supported options:
                               Print fix-its in machine parseable form
       -flto=<value>           Set LTO mode to either 'full' or 'thin'
       -flto                   Enable LTO in 'full' mode
+      -fmerge-all-constants   Allow merging of constants
       -fms-compatibility-version=<value>
                               Dot-separated value representing the Microsoft compiler version
                               number to report in _MSC_VER (0 = don't define it (default))
@@ -2892,9 +2919,17 @@ Execute ``clang-cl /?`` to see a list of supported options:
       -fms-extensions         Accept some non-standard constructs supported by the Microsoft compiler
       -fmsc-version=<value>   Microsoft compiler version number to report in _MSC_VER
                               (0 = don't define it (default))
+      -fno-addrsig            Don't emit an address-significance table
+      -fno-builtin-<value>    Disable implicit builtin knowledge of a specific function
+      -fno-builtin            Disable implicit builtin knowledge of functions
+      -fno-complete-member-pointers
+                              Do not require member pointer base types to be complete if they would be significant under the Microsoft ABI
+      -fno-coverage-mapping   Disable code coverage analysis
       -fno-debug-macro        Do not emit macro debug information
       -fno-delayed-template-parsing
                               Disable delayed template parsing
+      -fno-sanitize-address-poison-class-member-array-new-cookie
+                              Disable poisoning array cookies when using class member operator new[] in AddressSanitizer
       -fno-sanitize-address-use-after-scope
                               Disable use-after-scope detection in AddressSanitizer
       -fno-sanitize-blacklist Don't use blacklist file for sanitizers
@@ -2930,6 +2965,8 @@ Execute ``clang-cl /?`` to see a list of supported options:
                               Level of field padding for AddressSanitizer
       -fsanitize-address-globals-dead-stripping
                               Enable linker dead stripping of globals in AddressSanitizer
+      -fsanitize-address-poison-class-member-array-new-cookie
+                              Enable poisoning array cookies when using class member operator new[] in AddressSanitizer
       -fsanitize-address-use-after-scope
                               Enable use-after-scope detection in AddressSanitizer
       -fsanitize-blacklist=<value>

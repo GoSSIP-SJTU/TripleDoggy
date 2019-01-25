@@ -319,6 +319,32 @@ they should be discussed before they are added.  If you are creating a lot of
 repetitive diagnostics and/or have an idea for a useful formatter, please bring
 it up on the cfe-dev mailing list.
 
+**"sub" format**
+
+Example:
+  Given the following record definition of type ``TextSubstitution``:
+
+  .. code-block:: text
+
+    def select_ovl_candidate : TextSubstitution<
+      "%select{function|constructor}0%select{| template| %2}1">;
+
+  which can be used as
+
+  .. code-block:: text
+
+    def note_ovl_candidate : Note<
+      "candidate %sub{select_ovl_candidate}3,2,1 not viable">;
+
+  and will act as if it was written
+  ``"candidate %select{function|constructor}3%select{| template| %1}2 not viable"``.
+Description:
+  This format specifier is used to avoid repeating strings verbatim in multiple
+  diagnostics. The argument to ``%sub`` must name a ``TextSubstitution`` tblgen
+  record. The substitution must specify all arguments used by the substitution,
+  and the modifier indexes in the substitution are re-numbered accordingly. The
+  substituted text must itself be a valid format string before substitution.
+
 .. _internals-producing-diag:
 
 Producing the Diagnostic
@@ -1638,15 +1664,15 @@ and then the semantic handling of the attribute.
 Parsing of the attribute is determined by the various syntactic forms attributes
 can take, such as GNU, C++11, and Microsoft style attributes, as well as other
 information provided by the table definition of the attribute. Ultimately, the
-parsed representation of an attribute object is an ``AttributeList`` object.
+parsed representation of an attribute object is an ``ParsedAttr`` object.
 These parsed attributes chain together as a list of parsed attributes attached
 to a declarator or declaration specifier. The parsing of attributes is handled
 automatically by Clang, except for attributes spelled as keywords. When
 implementing a keyword attribute, the parsing of the keyword and creation of the
-``AttributeList`` object must be done manually.
+``ParsedAttr`` object must be done manually.
 
 Eventually, ``Sema::ProcessDeclAttributeList()`` is called with a ``Decl`` and
-an ``AttributeList``, at which point the parsed attribute can be transformed
+an ``ParsedAttr``, at which point the parsed attribute can be transformed
 into a semantic attribute. The process by which a parsed attribute is converted
 into a semantic attribute depends on the attribute definition and semantic
 requirements of the attribute. The end result, however, is that the semantic
@@ -1725,8 +1751,8 @@ subjects in the list, but a custom diagnostic parameter can also be specified in
 the ``SubjectList``. The diagnostics generated for subject list violations are
 either ``diag::warn_attribute_wrong_decl_type`` or
 ``diag::err_attribute_wrong_decl_type``, and the parameter enumeration is found
-in `include/clang/Sema/AttributeList.h
-<http://llvm.org/viewvc/llvm-project/cfe/trunk/include/clang/Sema/AttributeList.h?view=markup>`_
+in `include/clang/Sema/ParsedAttr.h
+<http://llvm.org/viewvc/llvm-project/cfe/trunk/include/clang/Sema/ParsedAttr.h?view=markup>`_
 If a previously unused Decl node is added to the ``SubjectList``, the logic used
 to automatically determine the diagnostic parameter in `utils/TableGen/ClangAttrEmitter.cpp
 <http://llvm.org/viewvc/llvm-project/cfe/trunk/utils/TableGen/ClangAttrEmitter.cpp?view=markup>`_
@@ -1861,14 +1887,9 @@ requirements. To support this feature, an attribute inheriting from
 should be the same value between all arguments sharing a spelling, and
 corresponds to the parsed attribute's ``Kind`` enumerator. This allows
 attributes to share a parsed attribute kind, but have distinct semantic
-attribute classes. For instance, ``AttributeList::AT_Interrupt`` is the shared
+attribute classes. For instance, ``ParsedAttr`` is the shared
 parsed attribute kind, but ARMInterruptAttr and MSP430InterruptAttr are the
 semantic attributes generated.
-
-By default, when declarations are merging attributes, an attribute will not be
-duplicated. However, if an attribute can be duplicated during this merging
-stage, set ``DuplicatesAllowedWhileMerging`` to ``1``, and the attribute will
-be merged.
 
 By default, attribute arguments are parsed in an evaluated context. If the
 arguments for an attribute should be parsed in an unevaluated context (akin to

@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// \brief This file implements parsing of all OpenMP directives and clauses.
+/// This file implements parsing of all OpenMP directives and clauses.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -210,7 +210,7 @@ static DeclarationName parseOpenMPReductionId(Parser &P) {
                         : DeclNames.getCXXOperatorName(OOK);
 }
 
-/// \brief Parse 'omp declare reduction' construct.
+/// Parse 'omp declare reduction' construct.
 ///
 ///       declare-reduction-directive:
 ///        annot_pragma_openmp 'declare' 'reduction'
@@ -424,13 +424,15 @@ void Parser::ParseOpenMPReductionInitializerForDecl(VarDecl *OmpPrivParm) {
       SkipUntil(tok::r_paren, tok::annot_pragma_openmp_end, StopBeforeMatch);
     } else {
       // Match the ')'.
-      T.consumeClose();
+      SourceLocation RLoc = Tok.getLocation();
+      if (!T.consumeClose())
+        RLoc = T.getCloseLocation();
 
       assert(!Exprs.empty() && Exprs.size() - 1 == CommaLocs.size() &&
              "Unexpected number of commas!");
 
-      ExprResult Initializer = Actions.ActOnParenListExpr(
-          T.getOpenLocation(), T.getCloseLocation(), Exprs);
+      ExprResult Initializer =
+          Actions.ActOnParenListExpr(T.getOpenLocation(), RLoc, Exprs);
       Actions.AddInitializerToDecl(OmpPrivParm, Initializer.get(),
                                    /*DirectInit=*/true);
     }
@@ -625,7 +627,7 @@ Parser::ParseOMPDeclareSimdClauses(Parser::DeclGroupPtrTy Ptr,
       LinModifiers, Steps, SourceRange(Loc, EndLoc));
 }
 
-/// \brief Parsing of declarative OpenMP directives.
+/// Parsing of declarative OpenMP directives.
 ///
 ///       threadprivate-directive:
 ///         annot_pragma_openmp 'threadprivate' simple-variable-list
@@ -874,7 +876,7 @@ Parser::DeclGroupPtrTy Parser::ParseOpenMPDeclarativeDirectiveWithExtDecl(
   return nullptr;
 }
 
-/// \brief Parsing of declarative or executable OpenMP directives.
+/// Parsing of declarative or executable OpenMP directives.
 ///
 ///       threadprivate-directive:
 ///         annot_pragma_openmp 'threadprivate' simple-variable-list
@@ -1197,7 +1199,7 @@ bool Parser::ParseOpenMPSimpleVarList(
   return !IsCorrect;
 }
 
-/// \brief Parsing of OpenMP clauses.
+/// Parsing of OpenMP clauses.
 ///
 ///    clause:
 ///       if-clause | final-clause | num_threads-clause | safelen-clause |
@@ -1378,13 +1380,14 @@ ExprResult Parser::ParseOpenMPParensExpr(StringRef ClauseName,
   Val = Actions.ActOnFinishFullExpr(Val.get(), ELoc);
 
   // Parse ')'.
-  T.consumeClose();
+  RLoc = Tok.getLocation();
+  if (!T.consumeClose())
+    RLoc = T.getCloseLocation();
 
-  RLoc = T.getCloseLocation();
   return Val;
 }
 
-/// \brief Parsing of OpenMP clauses with single expressions like 'final',
+/// Parsing of OpenMP clauses with single expressions like 'final',
 /// 'collapse', 'safelen', 'num_threads', 'simdlen', 'num_teams',
 /// 'thread_limit', 'simdlen', 'priority', 'grainsize', 'num_tasks' or 'hint'.
 ///
@@ -1431,7 +1434,7 @@ OMPClause *Parser::ParseOpenMPSingleExprClause(OpenMPClauseKind Kind,
   return Actions.ActOnOpenMPSingleExprClause(Kind, Val.get(), Loc, LLoc, RLoc);
 }
 
-/// \brief Parsing of simple OpenMP clauses like 'default' or 'proc_bind'.
+/// Parsing of simple OpenMP clauses like 'default' or 'proc_bind'.
 ///
 ///    default-clause:
 ///         'default' '(' 'none' | 'shared' ')
@@ -1457,15 +1460,16 @@ OMPClause *Parser::ParseOpenMPSimpleClause(OpenMPClauseKind Kind,
     ConsumeAnyToken();
 
   // Parse ')'.
-  T.consumeClose();
+  SourceLocation RLoc = Tok.getLocation();
+  if (!T.consumeClose())
+    RLoc = T.getCloseLocation();
 
   if (ParseOnly)
     return nullptr;
-  return Actions.ActOnOpenMPSimpleClause(Kind, Type, TypeLoc, LOpen, Loc,
-                                         Tok.getLocation());
+  return Actions.ActOnOpenMPSimpleClause(Kind, Type, TypeLoc, LOpen, Loc, RLoc);
 }
 
-/// \brief Parsing of OpenMP clauses like 'ordered'.
+/// Parsing of OpenMP clauses like 'ordered'.
 ///
 ///    ordered-clause:
 ///         'ordered'
@@ -1501,7 +1505,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPClauseKind Kind, bool ParseOnly) {
 }
 
 
-/// \brief Parsing of OpenMP clauses with single expressions and some additional
+/// Parsing of OpenMP clauses with single expressions and some additional
 /// argument like 'schedule' or 'dist_schedule'.
 ///
 ///    schedule-clause:
@@ -1633,7 +1637,9 @@ OMPClause *Parser::ParseOpenMPSingleExprWithArgClause(OpenMPClauseKind Kind,
   }
 
   // Parse ')'.
-  T.consumeClose();
+  SourceLocation RLoc = Tok.getLocation();
+  if (!T.consumeClose())
+    RLoc = T.getCloseLocation();
 
   if (NeedAnExpression && Val.isInvalid())
     return nullptr;
@@ -1641,8 +1647,7 @@ OMPClause *Parser::ParseOpenMPSingleExprWithArgClause(OpenMPClauseKind Kind,
   if (ParseOnly)
     return nullptr;
   return Actions.ActOnOpenMPSingleExprWithArgClause(
-      Kind, Arg, Val.get(), Loc, T.getOpenLocation(), KLoc, DelimLoc,
-      T.getCloseLocation());
+      Kind, Arg, Val.get(), Loc, T.getOpenLocation(), KLoc, DelimLoc, RLoc);
 }
 
 static bool ParseReductionId(Parser &P, CXXScopeSpec &ReductionIdScopeSpec,
@@ -1914,14 +1919,16 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
   }
 
   // Parse ')'.
-  T.consumeClose();
+  Data.RLoc = Tok.getLocation();
+  if (!T.consumeClose())
+    Data.RLoc = T.getCloseLocation();
   return (Kind == OMPC_depend && Data.DepKind != OMPC_DEPEND_unknown &&
           Vars.empty()) ||
          (Kind != OMPC_depend && Kind != OMPC_map && Vars.empty()) ||
          (MustHaveTail && !Data.TailExpr) || InvalidReductionId;
 }
 
-/// \brief Parsing of OpenMP clause 'private', 'firstprivate', 'lastprivate',
+/// Parsing of OpenMP clause 'private', 'firstprivate', 'lastprivate',
 /// 'shared', 'copyin', 'copyprivate', 'flush', 'reduction', 'task_reduction' or
 /// 'in_reduction'.
 ///
@@ -1979,7 +1986,7 @@ OMPClause *Parser::ParseOpenMPVarListClause(OpenMPDirectiveKind DKind,
   if (ParseOnly)
     return nullptr;
   return Actions.ActOnOpenMPVarListClause(
-      Kind, Vars, Data.TailExpr, Loc, LOpen, Data.ColonLoc, Tok.getLocation(),
+      Kind, Vars, Data.TailExpr, Loc, LOpen, Data.ColonLoc, Data.RLoc,
       Data.ReductionIdScopeSpec, Data.ReductionId, Data.DepKind, Data.LinKind,
       Data.MapTypeModifier, Data.MapType, Data.IsMapTypeImplicit,
       Data.DepLinMapLoc);

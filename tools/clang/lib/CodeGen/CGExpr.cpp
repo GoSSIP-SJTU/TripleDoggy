@@ -61,18 +61,30 @@ llvm::Value *CodeGenFunction::EmitCastToVoidPtr(llvm::Value *value) {
 
 /// CreateTempAlloca - This creates a alloca and inserts it into the entry
 /// block.
+Address CodeGenFunction::CreateTempAllocaWithoutCast(llvm::Type *Ty,
+                                                     CharUnits Align,
+                                                     const Twine &Name,
+                                                     llvm::Value *ArraySize) {
+  auto Alloca = CreateTempAlloca(Ty, Name, ArraySize);
+  Alloca->setAlignment(Align.getQuantity());
+  return Address(Alloca, Align);
+}
+
+/// CreateTempAlloca - This creates a alloca and inserts it into the entry
+/// block. The alloca is casted to default address space if necessary.
 Address CodeGenFunction::CreateTempAlloca(llvm::Type *Ty, CharUnits Align,
                                           const Twine &Name,
                                           llvm::Value *ArraySize,
-                                          bool CastToDefaultAddrSpace) {
-  auto Alloca = CreateTempAlloca(Ty, Name, ArraySize);
-  Alloca->setAlignment(Align.getQuantity());
-  llvm::Value *V = Alloca;
+                                          Address *AllocaAddr) {
+  auto Alloca = CreateTempAllocaWithoutCast(Ty, Align, Name, ArraySize);
+  if (AllocaAddr)
+    *AllocaAddr = Alloca;
+  llvm::Value *V = Alloca.getPointer();
   // Alloca always returns a pointer in alloca address space, which may
   // be different from the type defined by the language. For example,
   // in C++ the auto variables are in the default address space. Therefore
   // cast alloca to the default address space when necessary.
-  if (CastToDefaultAddrSpace && getASTAllocaAddressSpace() != LangAS::Default) {
+  if (getASTAllocaAddressSpace() != LangAS::Default) {
     auto DestAddrSpace = getContext().getTargetAddressSpace(LangAS::Default);
     llvm::IRBuilderBase::InsertPointGuard IPG(Builder);
     // When ArraySize is nullptr, alloca is inserted at AllocaInsertPt,
@@ -125,17 +137,26 @@ Address CodeGenFunction::CreateIRTemp(QualType Ty, const Twine &Name) {
 }
 
 Address CodeGenFunction::CreateMemTemp(QualType Ty, const Twine &Name,
-                                       bool CastToDefaultAddrSpace) {
+                                       Address *Alloca) {
   // FIXME: Should we prefer the preferred type alignment here?
-  return CreateMemTemp(Ty, getContext().getTypeAlignInChars(Ty), Name,
-                       CastToDefaultAddrSpace);
+  return CreateMemTemp(Ty, getContext().getTypeAlignInChars(Ty), Name, Alloca);
 }
 
 Address CodeGenFunction::CreateMemTemp(QualType Ty, CharUnits Align,
-                                       const Twine &Name,
-                                       bool CastToDefaultAddrSpace) {
-  return CreateTempAlloca(ConvertTypeForMem(Ty), Align, Name, nullptr,
-                          CastToDefaultAddrSpace);
+                                       const Twine &Name, Address *Alloca) {
+  return CreateTempAlloca(ConvertTypeForMem(Ty), Align, Name,
+                          /*ArraySize=*/nullptr, Alloca);
+}
+
+Address CodeGenFunction::CreateMemTempWithoutCast(QualType Ty, CharUnits Align,
+                                                  const Twine &Name) {
+  return CreateTempAllocaWithoutCast(ConvertTypeForMem(Ty), Align, Name);
+}
+
+Address CodeGenFunction::CreateMemTempWithoutCast(QualType Ty,
+                                                  const Twine &Name) {
+  return CreateMemTempWithoutCast(Ty, getContext().getTypeAlignInChars(Ty),
+                                  Name);
 }
 
 /// EvaluateExprAsBool - Perform the usual unary conversions on the specified
@@ -348,7 +369,8 @@ pushTemporaryCleanup(CodeGenFunction &CGF, const MaterializeTemporaryExpr *M,
 
 static Address createReferenceTemporary(CodeGenFunction &CGF,
                                         const MaterializeTemporaryExpr *M,
-                                        const Expr *Inner) {
+                                        const Expr *Inner,
+                                        Address *Alloca = nullptr) {
   auto &TCG = CGF.getTargetHooks();
   switch (M->getStorageDuration()) {
   case SD_FullExpression:
@@ -381,7 +403,7 @@ static Address createReferenceTemporary(CodeGenFunction &CGF,
           return Address(C, alignment);
         }
       }
-    return CGF.CreateMemTemp(Ty, "ref.tmp");
+    return CGF.CreateMemTemp(Ty, "ref.tmp", Alloca);
   }
   case SD_Thread:
   case SD_Static:
@@ -458,7 +480,8 @@ EmitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *M) {
   }
 
   // Create and initialize the reference temporary.
-  Address Object = createReferenceTemporary(*this, M, E);
+  Address Alloca = Address::invalid();
+  Address Object = createReferenceTemporary(*this, M, E, &Alloca);
   if (auto *Var = dyn_cast<llvm::GlobalVariable>(
           Object.getPointer()->stripPointerCasts())) {
     Object = Address(llvm::ConstantExpr::getBitCast(
@@ -477,13 +500,13 @@ EmitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *M) {
     case SD_Automatic:
     case SD_FullExpression:
       if (auto *Size = EmitLifetimeStart(
-              CGM.getDataLayout().getTypeAllocSize(Object.getElementType()),
-              Object.getPointer())) {
+              CGM.getDataLayout().getTypeAllocSize(Alloca.getElementType()),
+              Alloca.getPointer())) {
         if (M->getStorageDuration() == SD_Automatic)
           pushCleanupAfterFullExpr<CallLifetimeEnd>(NormalEHLifetimeMarker,
-                                                    Object, Size);
+                                                    Alloca, Size);
         else
-          pushFullExprCleanup<CallLifetimeEnd>(NormalEHLifetimeMarker, Object,
+          pushFullExprCleanup<CallLifetimeEnd>(NormalEHLifetimeMarker, Alloca,
                                                Size);
       }
       break;
@@ -1791,20 +1814,20 @@ RValue CodeGenFunction::EmitLoadOfExtVectorElementLValue(LValue LV) {
   return RValue::get(Vec);
 }
 
-/// @brief Generates lvalue for partial ext_vector access.
+/// Generates lvalue for partial ext_vector access.
 Address CodeGenFunction::EmitExtVectorElementLValue(LValue LV) {
   Address VectorAddress = LV.getExtVectorAddress();
   const VectorType *ExprVT = LV.getType()->getAs<VectorType>();
   QualType EQT = ExprVT->getElementType();
   llvm::Type *VectorElementTy = CGM.getTypes().ConvertType(EQT);
-  
+
   Address CastToPointerElement =
     Builder.CreateElementBitCast(VectorAddress, VectorElementTy,
                                  "conv.ptr.element");
-  
+
   const llvm::Constant *Elts = LV.getExtVectorElts();
   unsigned ix = getAccessedFieldNo(0, Elts);
-  
+
   Address VectorBasePtrPlusIx =
     Builder.CreateConstInBoundsGEP(CastToPointerElement, ix,
                                    getContext().getTypeSizeInChars(EQT),
@@ -1813,7 +1836,7 @@ Address CodeGenFunction::EmitExtVectorElementLValue(LValue LV) {
   return VectorBasePtrPlusIx;
 }
 
-/// @brief Load of global gamed gegisters are always calls to intrinsics.
+/// Load of global gamed gegisters are always calls to intrinsics.
 RValue CodeGenFunction::EmitLoadOfGlobalRegLValue(LValue LV) {
   assert((LV.getType()->isIntegerType() || LV.getType()->isPointerType()) &&
          "Bad type for register variable");
@@ -2073,7 +2096,7 @@ void CodeGenFunction::EmitStoreThroughExtVectorComponentLValue(RValue Src,
                       Dst.isVolatileQualified());
 }
 
-/// @brief Store of global named registers are always calls to intrinsics.
+/// Store of global named registers are always calls to intrinsics.
 void CodeGenFunction::EmitStoreThroughGlobalRegLValue(RValue Src, LValue Dst) {
   assert((Dst.getType()->isIntegerType() || Dst.getType()->isPointerType()) &&
          "Bad type for register variable");
@@ -2385,6 +2408,7 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
     // A DeclRefExpr for a reference initialized by a constant expression can
     // appear without being odr-used. Directly emit the constant initializer.
     const Expr *Init = VD->getAnyInitializer(VD);
+    const auto *BD = dyn_cast_or_null<BlockDecl>(CurCodeDecl);
     if (Init && !isa<ParmVarDecl>(VD) && VD->getType()->isReferenceType() &&
         VD->isUsableInConstantExpressions(getContext()) &&
         VD->checkInitIsICE() &&
@@ -2394,7 +2418,7 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
             (LocalDeclMap.count(VD->getCanonicalDecl()) ||
              CapturedStmtInfo->lookup(VD->getCanonicalDecl()))) ||
            LambdaCaptureFields.lookup(VD->getCanonicalDecl()) ||
-           isa<BlockDecl>(CurCodeDecl)))) {
+           (BD && BD->capturesVariable(VD))))) {
       llvm::Constant *Val =
         ConstantEmitter(*this).emitAbstract(E->getLocation(),
                                             *VD->evaluateValue(),
@@ -2710,7 +2734,7 @@ llvm::Value *CodeGenFunction::EmitCheckValue(llvm::Value *V) {
   return Builder.CreatePtrToInt(V, TargetTy);
 }
 
-/// \brief Emit a representation of a SourceLocation for passing to a handler
+/// Emit a representation of a SourceLocation for passing to a handler
 /// in a sanitizer runtime library. The format for this data is:
 /// \code
 ///   struct SourceLocation {
@@ -2769,7 +2793,7 @@ llvm::Constant *CodeGenFunction::EmitCheckSourceLocation(SourceLocation Loc) {
 }
 
 namespace {
-/// \brief Specify under what conditions this check can be recovered
+/// Specify under what conditions this check can be recovered
 enum class CheckRecoverableKind {
   /// Always terminate program execution if this check fails.
   Unrecoverable,
@@ -3052,6 +3076,11 @@ void CodeGenFunction::EmitCfiCheckFail() {
   StartFunction(GlobalDecl(), CGM.getContext().VoidTy, F, FI, Args,
                 SourceLocation());
 
+  // This function should not be affected by blacklist. This function does
+  // not have a source location, but "src:*" would still apply. Revert any
+  // changes to SanOpts made in StartFunction.
+  SanOpts = CGM.getLangOpts().Sanitize;
+
   llvm::Value *Data =
       EmitLoadOfScalar(GetAddrOfLocalVar(&ArgData), /*Volatile=*/false,
                        CGM.getContext().VoidPtrTy, ArgData.getLocation());
@@ -3254,7 +3283,7 @@ static Address emitArraySubscriptGEP(CodeGenFunction &CGF, Address addr,
   for (auto idx : indices.drop_back())
     assert(isa<llvm::ConstantInt>(idx) &&
            cast<llvm::ConstantInt>(idx)->isZero());
-#endif  
+#endif
 
   // Determine the element size of the statically-sized base.  This is
   // the thing that the indices are expressed in terms of.
@@ -3736,7 +3765,7 @@ LValue CodeGenFunction::EmitLValueForLambdaField(const FieldDecl *Field) {
 static Address emitAddrOfFieldStorage(CodeGenFunction &CGF, Address base,
                                       const FieldDecl *field) {
   const RecordDecl *rec = field->getParent();
-  
+
   unsigned idx =
     CGF.CGM.getTypes().getCGRecordLayout(rec).getLLVMFieldNo(field);
 
@@ -3842,6 +3871,18 @@ LValue CodeGenFunction::EmitLValueForField(LValue base,
   }
 
   Address addr = base.getAddress();
+  if (auto *ClassDef = dyn_cast<CXXRecordDecl>(rec)) {
+    if (CGM.getCodeGenOpts().StrictVTablePointers &&
+        ClassDef->isDynamicClass()) {
+      // Getting to any field of dynamic object requires stripping dynamic
+      // information provided by invariant.group.  This is because accessing
+      // fields may leak the real address of dynamic object, which could result
+      // in miscompilation when leaked pointer would be compared.
+      auto *stripped = Builder.CreateStripInvariantGroup(addr.getPointer());
+      addr = Address(stripped, addr.getAlignment());
+    }
+  }
+
   unsigned RecordCVR = base.getVRQualifiers();
   if (rec->isUnion()) {
     // For unions, there is no pointer adjustment.

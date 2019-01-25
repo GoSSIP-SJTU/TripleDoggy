@@ -64,7 +64,7 @@ extern char *basename(const char *);
 extern char *dirname(char *);
 #endif
 
-/** \brief Return the default parsing options. */
+/** Return the default parsing options. */
 static unsigned getDefaultParsingOptions() {
   unsigned options = CXTranslationUnit_DetailedPreprocessingRecord;
 
@@ -82,6 +82,8 @@ static unsigned getDefaultParsingOptions() {
     options |= CXTranslationUnit_CreatePreambleOnFirstParse;
   if (getenv("CINDEXTEST_KEEP_GOING"))
     options |= CXTranslationUnit_KeepGoing;
+  if (getenv("CINDEXTEST_LIMIT_SKIP_FUNCTION_BODIES_TO_PREAMBLE"))
+    options |= CXTranslationUnit_LimitSkipFunctionBodiesToPreamble;
 
   return options;
 }
@@ -149,7 +151,7 @@ static void ModifyPrintingPolicyAccordingToEnv(CXPrintingPolicy Policy) {
   }
 }
 
-/** \brief Returns 0 in case of success, non-zero in case of a failure. */
+/** Returns 0 in case of success, non-zero in case of a failure. */
 static int checkForErrors(CXTranslationUnit TU);
 
 static void describeLibclangFailure(enum CXErrorCode Err) {
@@ -2268,8 +2270,33 @@ static void print_completion_string(CXCompletionString completion_string,
 
 }
 
-static void print_completion_result(CXCompletionResult *completion_result,
+static void print_line_column(CXSourceLocation location, FILE *file) {
+    unsigned line, column;
+    clang_getExpansionLocation(location, NULL, &line, &column, NULL);
+    fprintf(file, "%d:%d", line, column);
+}
+
+static void print_token_range(CXTranslationUnit translation_unit,
+                              CXSourceLocation start, FILE *file) {
+  CXToken *token = clang_getToken(translation_unit, start);
+
+  fprintf(file, "{");
+  if (token != NULL) {
+    CXSourceRange token_range = clang_getTokenExtent(translation_unit, *token);
+    print_line_column(clang_getRangeStart(token_range), file);
+    fprintf(file, "-");
+    print_line_column(clang_getRangeEnd(token_range), file);
+    clang_disposeTokens(translation_unit, token, 1);
+  }
+
+  fprintf(file, "}");
+}
+
+static void print_completion_result(CXTranslationUnit translation_unit,
+                                    CXCodeCompleteResults *completion_results,
+                                    unsigned index,
                                     FILE *file) {
+  CXCompletionResult *completion_result = completion_results->Results + index;
   CXString ks = clang_getCursorKindSpelling(completion_result->CursorKind);
   unsigned annotationCount;
   enum CXCursorKind ParentKind;
@@ -2277,6 +2304,7 @@ static void print_completion_result(CXCompletionResult *completion_result,
   CXString BriefComment;
   CXString Annotation;
   const char *BriefCommentCString;
+  unsigned i;
   
   fprintf(file, "%s:", clang_getCString(ks));
   clang_disposeString(ks);
@@ -2337,7 +2365,19 @@ static void print_completion_result(CXCompletionResult *completion_result,
     fprintf(file, "(brief comment: %s)", BriefCommentCString);
   }
   clang_disposeString(BriefComment);
-  
+
+  for (i = 0; i < clang_getCompletionNumFixIts(completion_results, index);
+       ++i) {
+    CXSourceRange correction_range;
+    CXString FixIt = clang_getCompletionFixIt(completion_results, index, i,
+                                              &correction_range);
+    fprintf(file, " (requires fix-it: ");
+    print_token_range(translation_unit, clang_getRangeStart(correction_range),
+                      file);
+    fprintf(file, " to \"%s\")", clang_getCString(FixIt));
+    clang_disposeString(FixIt);
+  }
+
   fprintf(file, "\n");
 }
 
@@ -2436,6 +2476,8 @@ int perform_code_completion(int argc, const char **argv, int timing_only) {
     completionOptions |= CXCodeComplete_IncludeBriefComments;
   if (getenv("CINDEXTEST_COMPLETION_SKIP_PREAMBLE"))
     completionOptions |= CXCodeComplete_SkipPreamble;
+  if (getenv("CINDEXTEST_COMPLETION_INCLUDE_FIXITS"))
+    completionOptions |= CXCodeComplete_IncludeCompletionsWithFixIts;
   
   if (timing_only)
     input += strlen("-code-completion-timing=");
@@ -2500,7 +2542,7 @@ int perform_code_completion(int argc, const char **argv, int timing_only) {
       clang_sortCodeCompletionResults(results->Results, results->NumResults);
 
       for (i = 0; i != n; ++i)
-        print_completion_result(results->Results + i, stdout);
+        print_completion_result(TU, results, i, stdout);
     }
     n = clang_codeCompleteGetNumDiagnostics(results);
     for (i = 0; i != n; ++i) {
@@ -3610,6 +3652,8 @@ static unsigned getIndexOptions(void) {
     index_opts |= CXIndexOpt_IndexFunctionLocalSymbols;
   if (!getenv("CINDEXTEST_DISABLE_SKIPPARSEDBODIES"))
     index_opts |= CXIndexOpt_SkipParsedBodiesInSession;
+  if (getenv("CINDEXTEST_INDEXIMPLICITTEMPLATEINSTANTIATIONS"))
+    index_opts |= CXIndexOpt_IndexImplicitTemplateInstantiations;
 
   return index_opts;
 }
@@ -4400,10 +4444,10 @@ static void printLocation(CXSourceLocation L) {
   CXFile File;
   CXString FileName;
   unsigned line, column, offset;
-  
+
   clang_getExpansionLocation(L, &File, &line, &column, &offset);
   FileName = clang_getFileName(File);
-  
+
   fprintf(stderr, "%s:%d:%d", clang_getCString(FileName), line, column);
   clang_disposeString(FileName);
 }

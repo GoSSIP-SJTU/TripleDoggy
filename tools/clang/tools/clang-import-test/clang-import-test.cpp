@@ -9,6 +9,7 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTImporter.h"
+#include "clang/AST/ASTImporterLookupTable.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/ExternalASTMerger.h"
 #include "clang/Basic/Builtins.h"
@@ -194,6 +195,10 @@ std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
   Inv->getLangOpts()->ThreadsafeStatics = false;
   Inv->getLangOpts()->AccessControl = false;
   Inv->getLangOpts()->DollarIdents = true;
+  Inv->getLangOpts()->Exceptions = true;
+  Inv->getLangOpts()->CXXExceptions = true;
+  // Needed for testing dynamic_cast.
+  Inv->getLangOpts()->RTTI = true;
   Inv->getCodeGenOpts().setDebugInfo(codegenoptions::FullDebugInfo);
   Inv->getTargetOpts().Triple = llvm::sys::getDefaultTargetTriple();
 

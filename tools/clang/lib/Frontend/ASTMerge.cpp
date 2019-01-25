@@ -10,6 +10,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/ASTImporter.h"
+#include "clang/AST/ASTImporterLookupTable.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendActions.h"
@@ -38,6 +39,8 @@ void ASTMergeAction::ExecuteAction() {
                                        &CI.getASTContext());
   IntrusiveRefCntPtr<DiagnosticIDs>
       DiagIDs(CI.getDiagnostics().getDiagnosticIDs());
+  ASTImporterLookupTable LookupTable(
+      *CI.getASTContext().getTranslationUnitDecl());
   for (unsigned I = 0, N = ASTFiles.size(); I != N; ++I) {
     IntrusiveRefCntPtr<DiagnosticsEngine>
         Diags(new DiagnosticsEngine(DiagIDs, &CI.getDiagnosticOpts(),
@@ -51,9 +54,10 @@ void ASTMergeAction::ExecuteAction() {
     if (!Unit)
       continue;
 
-    ASTImporter Importer(CI.getASTContext(), 
+    ASTImporter Importer(&LookupTable,
+                         CI.getASTContext(),
                          CI.getFileManager(),
-                         Unit->getASTContext(), 
+                         Unit->getASTContext(),
                          Unit->getFileManager(),
                          /*MinimalImport=*/false);
 
@@ -64,13 +68,14 @@ void ASTMergeAction::ExecuteAction() {
         if (IdentifierInfo *II = ND->getIdentifier())
           if (II->isStr("__va_list_tag") || II->isStr("__builtin_va_list"))
             continue;
-      
-      Decl *ToD = Importer.Import(D);
-    
-      if (ToD) {
-        DeclGroupRef DGR(ToD);
+
+      llvm::Expected<Decl *> ToDOrError = Importer.Import(D);
+
+      if (ToDOrError) {
+        DeclGroupRef DGR(*ToDOrError);
         CI.getASTConsumer().HandleTopLevelDecl(DGR);
-      }
+      } else
+        llvm::consumeError(ToDOrError.takeError());
     }
   }
 
@@ -88,7 +93,7 @@ ASTMergeAction::ASTMergeAction(std::unique_ptr<FrontendAction> adaptedAction,
   assert(AdaptedAction && "ASTMergeAction needs an action to adapt");
 }
 
-ASTMergeAction::~ASTMergeAction() { 
+ASTMergeAction::~ASTMergeAction() {
 }
 
 bool ASTMergeAction::usesPreprocessorOnly() const {

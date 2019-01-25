@@ -130,4 +130,3 @@ bool CheckerContext::isNegative(const Expr *E) {
   DefinedSVal V = getSValBuilder().makeIntVal(0, false);
   return evalComparison(getSVal(E), BO_LT, V, getState());
 }
-

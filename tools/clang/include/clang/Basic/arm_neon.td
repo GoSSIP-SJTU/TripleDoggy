@@ -338,12 +338,24 @@ def VSLI_N : WInst<"vsli_n", "dddi",
 // E.3.14 Loads and stores of a single vector
 def VLD1      : WInst<"vld1", "dc",
                       "QUcQUsQUiQUlQcQsQiQlQhQfQPcQPsUcUsUiUlcsilhfPcPs">;
+def VLD1_X2   : WInst<"vld1_x2", "2c",
+                      "cfhilsUcUiUlUsQcQfQhQiQlQsQUcQUiQUlQUsPcPsQPcQPs">;
+def VLD1_X3   : WInst<"vld1_x3", "3c",
+                      "cfhilsUcUiUlUsQcQfQhQiQlQsQUcQUiQUlQUsPcPsQPcQPs">;
+def VLD1_X4   : WInst<"vld1_x4", "4c",
+                      "cfhilsUcUiUlUsQcQfQhQiQlQsQUcQUiQUlQUsPcPsQPcQPs">;
 def VLD1_LANE : WInst<"vld1_lane", "dcdi",
                       "QUcQUsQUiQUlQcQsQiQlQhQfQPcQPsUcUsUiUlcsilhfPcPs">;
 def VLD1_DUP  : WInst<"vld1_dup", "dc",
                       "QUcQUsQUiQUlQcQsQiQlQhQfQPcQPsUcUsUiUlcsilhfPcPs">;
 def VST1      : WInst<"vst1", "vpd",
                       "QUcQUsQUiQUlQcQsQiQlQhQfQPcQPsUcUsUiUlcsilhfPcPs">;
+def VST1_X2   : WInst<"vst1_x2", "vp2",
+                      "cfhilsUcUiUlUsQcQfQhQiQlQsQUcQUiQUlQUsPcPsQPcQPs">;
+def VST1_X3   : WInst<"vst1_x3", "vp3",
+                      "cfhilsUcUiUlUsQcQfQhQiQlQsQUcQUiQUlQUsPcPsQPcQPs">;
+def VST1_X4   : WInst<"vst1_x4", "vp4",
+                      "cfhilsUcUiUlUsQcQfQhQiQlQsQUcQUiQUlQUsPcPsQPcQPs">;
 def VST1_LANE : WInst<"vst1_lane", "vpdi",
                       "QUcQUsQUiQUlQcQsQiQlQhQfQPcQPsUcUsUiUlcsilhfPcPs">;
 
@@ -352,9 +364,12 @@ def VST1_LANE : WInst<"vst1_lane", "vpdi",
 def VLD2 : WInst<"vld2", "2c", "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPs">;
 def VLD3 : WInst<"vld3", "3c", "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPs">;
 def VLD4 : WInst<"vld4", "4c", "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPs">;
-def VLD2_DUP  : WInst<"vld2_dup", "2c", "UcUsUiUlcsilhfPcPs">;
-def VLD3_DUP  : WInst<"vld3_dup", "3c", "UcUsUiUlcsilhfPcPs">;
-def VLD4_DUP  : WInst<"vld4_dup", "4c", "UcUsUiUlcsilhfPcPs">;
+def VLD2_DUP  : WInst<"vld2_dup", "2c",
+                      "UcUsUiUlcsilhfPcPsQcQfQhQiQlQsQPcQPsQUcQUiQUlQUs">;
+def VLD3_DUP  : WInst<"vld3_dup", "3c",
+                      "UcUsUiUlcsilhfPcPsQcQfQhQiQlQsQPcQPsQUcQUiQUlQUs">;
+def VLD4_DUP  : WInst<"vld4_dup", "4c",
+                      "UcUsUiUlcsilhfPcPsQcQfQhQiQlQsQPcQPsQUcQUiQUlQUs">;
 def VLD2_LANE : WInst<"vld2_lane", "2c2i", "QUsQUiQsQiQhQfQPsUcUsUicsihfPcPs">;
 def VLD3_LANE : WInst<"vld3_lane", "3c3i", "QUsQUiQsQiQhQfQPsUcUsUicsihfPcPs">;
 def VLD4_LANE : WInst<"vld4_lane", "4c4i", "QUsQUiQsQiQhQfQPsUcUsUicsihfPcPs">;
@@ -569,18 +584,15 @@ def ST3 : WInst<"vst3", "vp3", "QUlQldQdPlQPl">;
 def ST4 : WInst<"vst4", "vp4", "QUlQldQdPlQPl">;
 
 def LD1_X2 : WInst<"vld1_x2", "2c",
-                   "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPsQUlQldQdPlQPl">;
-def LD3_x3 : WInst<"vld1_x3", "3c",
-                   "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPsQUlQldQdPlQPl">;
-def LD4_x4 : WInst<"vld1_x4", "4c",
-                   "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPsQUlQldQdPlQPl">;
+                   "dQdPlQPl">;
+def LD1_X3 : WInst<"vld1_x3", "3c",
+                   "dQdPlQPl">;
+def LD1_X4 : WInst<"vld1_x4", "4c",
+                   "dQdPlQPl">;
 
-def ST1_X2 : WInst<"vst1_x2", "vp2",
-                   "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPsQUlQldQdPlQPl">;
-def ST1_X3 : WInst<"vst1_x3", "vp3",
-                   "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPsQUlQldQdPlQPl">;
-def ST1_X4 : WInst<"vst1_x4", "vp4",
-                   "QUcQUsQUiQcQsQiQhQfQPcQPsUcUsUiUlcsilhfPcPsQUlQldQdPlQPl">;
+def ST1_X2 : WInst<"vst1_x2", "vp2", "dQdPlQPl">;
+def ST1_X3 : WInst<"vst1_x3", "vp3", "dQdPlQPl">;
+def ST1_X4 : WInst<"vst1_x4", "vp4", "dQdPlQPl">;
 
 def LD1_LANE : WInst<"vld1_lane", "dcdi", "dQdPlQPl">;
 def LD2_LANE : WInst<"vld2_lane", "2c2i", "lUlQcQUcQPcQlQUldQdPlQPl">;
@@ -592,12 +604,9 @@ def ST3_LANE : WInst<"vst3_lane", "vp3i", "lUlQcQUcQPcQlQUldQdPlQPl">;
 def ST4_LANE : WInst<"vst4_lane", "vp4i", "lUlQcQUcQPcQlQUldQdPlQPl">;
 
 def LD1_DUP  : WInst<"vld1_dup", "dc", "dQdPlQPl">;
-def LD2_DUP  : WInst<"vld2_dup", "2c",
-                     "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsQPldPl">;
-def LD3_DUP  : WInst<"vld3_dup", "3c",
-                     "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsQPldPl">;
-def LD4_DUP  : WInst<"vld4_dup", "4c",
-                     "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsQPldPl">;
+def LD2_DUP  : WInst<"vld2_dup", "2c", "dQdPlQPl">;
+def LD3_DUP  : WInst<"vld3_dup", "3c", "dQdPlQPl">;
+def LD4_DUP  : WInst<"vld4_dup", "4c", "dQdPlQPl">;
 
 def VLDRQ : WInst<"vldrq", "sc", "Pk">;
 def VSTRQ : WInst<"vstrq", "vps", "Pk">;
@@ -763,9 +772,9 @@ def RSHRN_HIGH_N   : IOpInst<"vrshrn_high_n", "hmdi",
                              "HsHiHlHUsHUiHUl", OP_NARROW_HI>;
 def QRSHRUN_HIGH_N : SOpInst<"vqrshrun_high_n", "hmdi",
                              "HsHiHl", OP_NARROW_HI>;
-def QSHRN_HIGH_N   : SOpInst<"vqshrn_high_n", "hmdi", 
+def QSHRN_HIGH_N   : SOpInst<"vqshrn_high_n", "hmdi",
                              "HsHiHlHUsHUiHUl", OP_NARROW_HI>;
-def QRSHRN_HIGH_N  : SOpInst<"vqrshrn_high_n", "hmdi", 
+def QRSHRN_HIGH_N  : SOpInst<"vqrshrn_high_n", "hmdi",
                              "HsHiHlHUsHUiHUl", OP_NARROW_HI>;
 }
 
@@ -918,7 +927,7 @@ def VMINV   : SInst<"vminv", "sd", "csifUcUsUiQcQsQiQUcQUsQUiQfQd">;
 def VADDV   : SInst<"vaddv", "sd", "csifUcUsUiQcQsQiQUcQUsQUiQfQdQlQUl">;
 def FMAXNMV : SInst<"vmaxnmv", "sd", "fQfQd">;
 def FMINNMV : SInst<"vminnmv", "sd", "fQfQd">;
- 
+
 ////////////////////////////////////////////////////////////////////////////////
 // Newly added Vector Extract for f64
 def VEXT_A64 : WInst<"vext", "dddi", "dQdPlQPl">;
@@ -979,6 +988,7 @@ def FRINTP_S32 : SInst<"vrndp", "dd", "fQf">;
 def FRINTM_S32 : SInst<"vrndm", "dd", "fQf">;
 def FRINTX_S32 : SInst<"vrndx", "dd", "fQf">;
 def FRINTZ_S32 : SInst<"vrnd", "dd", "fQf">;
+def FRINTI_S32 : SInst<"vrndi", "dd", "fQf">;
 }
 
 let ArchGuard = "__ARM_ARCH >= 8 && defined(__aarch64__) && defined(__ARM_FEATURE_DIRECTED_ROUNDING)" in {
@@ -988,7 +998,7 @@ def FRINTP_S64 : SInst<"vrndp", "dd", "dQd">;
 def FRINTM_S64 : SInst<"vrndm", "dd", "dQd">;
 def FRINTX_S64 : SInst<"vrndx", "dd", "dQd">;
 def FRINTZ_S64 : SInst<"vrnd", "dd", "dQd">;
-def FRINTI_S64 : SInst<"vrndi", "dd", "fdQfQd">;
+def FRINTI_S64 : SInst<"vrndi", "dd", "dQd">;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1407,12 +1417,14 @@ let ArchGuard = "defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)" in {
   def VCVTP_U16    : SInst<"vcvtp_u16", "ud", "hQh">;
 
   // Vector rounding
-  def FRINTZH      : SInst<"vrnd",  "dd", "hQh">;
-  def FRINTNH      : SInst<"vrndn", "dd", "hQh">;
-  def FRINTAH      : SInst<"vrnda", "dd", "hQh">;
-  def FRINTPH      : SInst<"vrndp", "dd", "hQh">;
-  def FRINTMH      : SInst<"vrndm", "dd", "hQh">;
-  def FRINTXH      : SInst<"vrndx", "dd", "hQh">;
+  let ArchGuard = "__ARM_ARCH >= 8 && defined(__ARM_FEATURE_DIRECTED_ROUNDING) && defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)" in {
+    def FRINTZH      : SInst<"vrnd",  "dd", "hQh">;
+    def FRINTNH      : SInst<"vrndn", "dd", "hQh">;
+    def FRINTAH      : SInst<"vrnda", "dd", "hQh">;
+    def FRINTPH      : SInst<"vrndp", "dd", "hQh">;
+    def FRINTMH      : SInst<"vrndm", "dd", "hQh">;
+    def FRINTXH      : SInst<"vrndx", "dd", "hQh">;
+  }
 
   // Misc.
   def VABSH        : SInst<"vabs", "dd", "hQh">;
@@ -1429,12 +1441,12 @@ let ArchGuard = "defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)" in {
 
   // Comparison
   let InstName = "vacge" in {
-	  def VCAGEH     : SInst<"vcage", "udd", "hQh">;
-	  def VCALEH     : SInst<"vcale", "udd", "hQh">;
+    def VCAGEH     : SInst<"vcage", "udd", "hQh">;
+    def VCALEH     : SInst<"vcale", "udd", "hQh">;
   }
   let InstName = "vacgt" in {
     def VCAGTH     : SInst<"vcagt", "udd", "hQh">;
-	  def VCALTH     : SInst<"vcalt", "udd", "hQh">;
+    def VCALTH     : SInst<"vcalt", "udd", "hQh">;
   }
   def VCEQH        : SOpInst<"vceq", "udd", "hQh", OP_EQ>;
   def VCGEH        : SOpInst<"vcge", "udd", "hQh", OP_GE>;
@@ -1454,8 +1466,10 @@ let ArchGuard = "defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)" in {
   // Max/Min
   def VMAXH         : SInst<"vmax", "ddd", "hQh">;
   def VMINH         : SInst<"vmin", "ddd", "hQh">;
-  def FMAXNMH       : SInst<"vmaxnm", "ddd", "hQh">;
-  def FMINNMH       : SInst<"vminnm", "ddd", "hQh">;
+  let ArchGuard = "__ARM_ARCH >= 8 && defined(__ARM_FEATURE_NUMERIC_MAXMIN) && defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)" in {
+    def FMAXNMH       : SInst<"vmaxnm", "ddd", "hQh">;
+    def FMINNMH       : SInst<"vminnm", "ddd", "hQh">;
+  }
 
   // Multiplication/Division
   def VMULH         : SOpInst<"vmul", "ddd", "hQh", OP_MUL>;

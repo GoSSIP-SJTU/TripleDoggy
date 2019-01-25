@@ -422,6 +422,35 @@ TEST(Matcher, AnyArgument) {
   EXPECT_TRUE(matches("void x(long) { int y; x(y); }", ImplicitCastedArgument));
 }
 
+TEST(Matcher, HasReceiver) {
+  EXPECT_TRUE(matchesObjC(
+      "@interface NSString @end "
+      "void f(NSString *x) {"
+      "[x containsString];"
+      "}",
+      objcMessageExpr(hasReceiver(declRefExpr(to(varDecl(hasName("x"))))))));
+
+  EXPECT_FALSE(matchesObjC(
+      "@interface NSString +(NSString *) stringWithFormat; @end "
+      "void f() { [NSString stringWithFormat]; }",
+      objcMessageExpr(hasReceiver(declRefExpr(to(varDecl(hasName("x"))))))));
+}
+
+TEST(Matcher, isInstanceMessage) {
+  EXPECT_TRUE(matchesObjC(
+      "@interface NSString @end "
+      "void f(NSString *x) {"
+      "[x containsString];"
+      "}",
+      objcMessageExpr(isInstanceMessage())));
+
+  EXPECT_FALSE(matchesObjC(
+      "@interface NSString +(NSString *) stringWithFormat; @end "
+      "void f() { [NSString stringWithFormat]; }",
+      objcMessageExpr(isInstanceMessage())));
+
+}
+
 TEST(ForEachArgumentWithParam, ReportsNoFalsePositives) {
   StatementMatcher ArgumentY =
     declRefExpr(to(varDecl(hasName("y")))).bind("arg");
@@ -541,6 +570,8 @@ TEST(HasParameter, CallsInnerMatcher) {
                          cxxMethodDecl(hasParameter(0, hasName("x")))));
   EXPECT_TRUE(matchesObjC("@interface I -(void)f:(int) x; @end",
                           objcMethodDecl(hasParameter(0, hasName("x")))));
+  EXPECT_TRUE(matchesObjC("int main() { void (^b)(int) = ^(int p) {}; }",
+                          blockDecl(hasParameter(0, hasName("p")))));
 }
 
 TEST(HasParameter, DoesNotMatchIfIndexOutOfBounds) {
@@ -572,6 +603,8 @@ TEST(HasAnyParameter, MatchesIndependentlyOfPosition) {
     cxxMethodDecl(hasAnyParameter(hasType(recordDecl(hasName("X")))))));
   EXPECT_TRUE(matchesObjC("@interface I -(void)f:(int) x; @end",
                           objcMethodDecl(hasAnyParameter(hasName("x")))));
+  EXPECT_TRUE(matchesObjC("int main() { void (^b)(int) = ^(int p) {}; }",
+                          blockDecl(hasAnyParameter(hasName("p")))));
 }
 
 TEST(Returns, MatchesReturnTypes) {

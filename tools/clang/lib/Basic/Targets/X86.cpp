@@ -102,26 +102,6 @@ bool X86TargetInfo::setFPMath(StringRef Name) {
   return false;
 }
 
-bool X86TargetInfo::checkCFProtectionReturnSupported(
-    DiagnosticsEngine &Diags) const {
-  if (HasSHSTK)
-    return true;
-
-  Diags.Report(diag::err_opt_not_valid_without_opt) << "cf-protection=return"
-                                                    << "-mshstk";
-  return false;
-}
-
-bool X86TargetInfo::checkCFProtectionBranchSupported(
-    DiagnosticsEngine &Diags) const {
-  if (HasIBT)
-    return true;
-
-  Diags.Report(diag::err_opt_not_valid_without_opt) << "cf-protection=branch"
-                                                    << "-mibt";
-  return false;
-}
-
 bool X86TargetInfo::initFeatureMap(
     llvm::StringMap<bool> &Features, DiagnosticsEngine &Diags, StringRef CPU,
     const std::vector<std::string> &FeaturesVec) const {
@@ -154,6 +134,7 @@ bool X86TargetInfo::initFeatureMap(
     break;
 
   case CK_IcelakeServer:
+    setFeatureEnabledImpl(Features, "pconfig", true);
     setFeatureEnabledImpl(Features, "wbnoinvd", true);
     LLVM_FALLTHROUGH;
   case CK_IcelakeClient:
@@ -201,6 +182,7 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "bmi", true);
     setFeatureEnabledImpl(Features, "bmi2", true);
     setFeatureEnabledImpl(Features, "fma", true);
+    setFeatureEnabledImpl(Features, "invpcid", true);
     setFeatureEnabledImpl(Features, "movbe", true);
     LLVM_FALLTHROUGH;
   case CK_IvyBridge:
@@ -252,6 +234,7 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "waitpkg", true);
     LLVM_FALLTHROUGH;
   case CK_GoldmontPlus:
+    setFeatureEnabledImpl(Features, "ptwrite", true);
     setFeatureEnabledImpl(Features, "rdpid", true);
     setFeatureEnabledImpl(Features, "sgx", true);
     LLVM_FALLTHROUGH;
@@ -779,8 +762,6 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasMPX = true;
     } else if (Feature == "+shstk") {
       HasSHSTK = true;
-    } else if (Feature == "+ibt") {
-      HasIBT = true;
     } else if (Feature == "+movbe") {
       HasMOVBE = true;
     } else if (Feature == "+sgx") {
@@ -827,6 +808,12 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasMOVDIRI = true;
     } else if (Feature == "+movdir64b") {
       HasMOVDIR64B = true;
+    } else if (Feature == "+pconfig") {
+      HasPCONFIG = true;
+    } else if (Feature == "+ptwrite") {
+      HasPTWRITE = true;
+    } else if (Feature == "+invpcid") {
+      HasINVPCID = true;
     }
 
     X86SSEEnum Level = llvm::StringSwitch<X86SSEEnum>(Feature)
@@ -1169,8 +1156,6 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__MPX__");
   if (HasSHSTK)
     Builder.defineMacro("__SHSTK__");
-  if (HasIBT)
-    Builder.defineMacro("__IBT__");
   if (HasSGX)
     Builder.defineMacro("__SGX__");
   if (HasPREFETCHWT1)
@@ -1187,6 +1172,12 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__MOVDIRI__");
   if (HasMOVDIR64B)
     Builder.defineMacro("__MOVDIR64B__");
+  if (HasPCONFIG)
+    Builder.defineMacro("__PCONFIG__");
+  if (HasPTWRITE)
+    Builder.defineMacro("__PTWRITE__");
+  if (HasINVPCID)
+    Builder.defineMacro("__INVPCID__");
 
   // Each case falls through to the previous one here.
   switch (SSELevel) {
@@ -1307,6 +1298,7 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("fsgsbase", true)
       .Case("fxsr", true)
       .Case("gfni", true)
+      .Case("invpcid", true)
       .Case("lwp", true)
       .Case("lzcnt", true)
       .Case("mmx", true)
@@ -1316,10 +1308,12 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("mpx", true)
       .Case("mwaitx", true)
       .Case("pclmul", true)
+      .Case("pconfig", true)
       .Case("pku", true)
       .Case("popcnt", true)
       .Case("prefetchwt1", true)
       .Case("prfchw", true)
+      .Case("ptwrite", true)
       .Case("rdpid", true)
       .Case("rdrnd", true)
       .Case("rdseed", true)
@@ -1382,7 +1376,7 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("fsgsbase", HasFSGSBASE)
       .Case("fxsr", HasFXSR)
       .Case("gfni", HasGFNI)
-      .Case("ibt", HasIBT)
+      .Case("invpcid", HasINVPCID)
       .Case("lwp", HasLWP)
       .Case("lzcnt", HasLZCNT)
       .Case("mm3dnow", MMX3DNowLevel >= AMD3DNow)
@@ -1394,10 +1388,12 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("mpx", HasMPX)
       .Case("mwaitx", HasMWAITX)
       .Case("pclmul", HasPCLMUL)
+      .Case("pconfig", HasPCONFIG)
       .Case("pku", HasPKU)
       .Case("popcnt", HasPOPCNT)
       .Case("prefetchwt1", HasPREFETCHWT1)
       .Case("prfchw", HasPRFCHW)
+      .Case("ptwrite", HasPTWRITE)
       .Case("rdpid", HasRDPID)
       .Case("rdrnd", HasRDRND)
       .Case("rdseed", HasRDSEED)
@@ -1486,6 +1482,38 @@ unsigned X86TargetInfo::multiVersionSortPriority(StringRef Name) const {
   // Now we know we have a feature, so get its priority and shift it a few so
   // that we have sufficient room for the CPUs (above).
   return getFeaturePriority(getFeature(Name)) << 1;
+}
+
+bool X86TargetInfo::validateCPUSpecificCPUDispatch(StringRef Name) const {
+  return llvm::StringSwitch<bool>(Name)
+#define CPU_SPECIFIC(NAME, MANGLING, FEATURES) .Case(NAME, true)
+#define CPU_SPECIFIC_ALIAS(NEW_NAME, NAME) .Case(NEW_NAME, true)
+#include "clang/Basic/X86Target.def"
+      .Default(false);
+}
+
+static StringRef CPUSpecificCPUDispatchNameDealias(StringRef Name) {
+  return llvm::StringSwitch<StringRef>(Name)
+#define CPU_SPECIFIC_ALIAS(NEW_NAME, NAME) .Case(NEW_NAME, NAME)
+#include "clang/Basic/X86Target.def"
+      .Default(Name);
+}
+
+char X86TargetInfo::CPUSpecificManglingCharacter(StringRef Name) const {
+  return llvm::StringSwitch<char>(CPUSpecificCPUDispatchNameDealias(Name))
+#define CPU_SPECIFIC(NAME, MANGLING, FEATURES) .Case(NAME, MANGLING)
+#include "clang/Basic/X86Target.def"
+      .Default(0);
+}
+
+void X86TargetInfo::getCPUSpecificCPUDispatchFeatures(
+    StringRef Name, llvm::SmallVectorImpl<StringRef> &Features) const {
+  StringRef WholeList =
+      llvm::StringSwitch<StringRef>(CPUSpecificCPUDispatchNameDealias(Name))
+#define CPU_SPECIFIC(NAME, MANGLING, FEATURES) .Case(NAME, FEATURES)
+#include "clang/Basic/X86Target.def"
+          .Default("");
+  WholeList.split(Features, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
 }
 
 std::string X86TargetInfo::getCPUKindCanonicalName(CPUKind Kind) const {
@@ -1729,7 +1757,7 @@ void X86TargetInfo::fillValidCPUList(SmallVectorImpl<StringRef> &Values) const {
 #define PROC(ENUM, STRING, IS64BIT)                                            \
   if (IS64BIT || getTriple().getArch() == llvm::Triple::x86)                   \
     Values.emplace_back(STRING);
-  // Go through CPUKind checking to ensure that the alias is de-aliased and 
+  // Go through CPUKind checking to ensure that the alias is de-aliased and
   // 64 bit-ness is checked.
 #define PROC_ALIAS(ENUM, ALIAS)                                                \
   if (checkCPUKind(getCPUKind(ALIAS)))                                         \

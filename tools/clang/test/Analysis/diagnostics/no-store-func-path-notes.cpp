@@ -97,11 +97,28 @@ struct C {
   int x;
   int y;
   C(int pX, int pY) : x(pX) {} // expected-note{{Returning without writing to 'this->y'}}
+
+  C(int pX, int pY, bool Flag) {
+    x = pX;
+    if (Flag) // expected-note{{Assuming 'Flag' is not equal to 0}}
+              // expected-note@-1{{Taking true branch}}
+      return; // expected-note{{Returning without writing to 'this->y'}}
+    y = pY;
+  }
 };
 
 int use_constructor() {
   C c(0, 0); // expected-note{{Calling constructor for 'C'}}
              // expected-note@-1{{Returning from constructor for 'C'}}
+  return c.y; // expected-note{{Undefined or garbage value returned to caller}}
+              // expected-warning@-1{{Undefined or garbage value returned to caller}}
+}
+
+int coin();
+
+int use_other_constructor() {
+  C c(0, 0, coin()); // expected-note{{Calling constructor for 'C'}}
+                     // expected-note@-1{{Returning from constructor for 'C'}}
   return c.y; // expected-note{{Undefined or garbage value returned to caller}}
               // expected-warning@-1{{Undefined or garbage value returned to caller}}
 }
@@ -121,8 +138,6 @@ int use_d_initializer(D* d) {
   return p;                     // expected-note{{Undefined or garbage value returned to caller}}
                                 // expected-warning@-1{{Undefined or garbage value returned to caller}}
 }
-
-int coin();
 
 struct S2 {
   int x;
@@ -144,4 +159,19 @@ int usepointerreference() {
                          //expected-note@-1{{Returning from 'pointerreference'}}
   return s.x; // expected-warning{{Undefined or garbage value returned to caller}}
               // expected-note@-1{{Undefined or garbage value returned to caller}}
+}
+
+void *has_no_argument_and_returns_null(void) {
+  return 0;
+}
+
+void rdar40335545() {
+    int local; // expected-note{{}}
+    void (*takes_int_ptr_argument)(int *) = (void (*)(int*))has_no_argument_and_returns_null;
+
+    takes_int_ptr_argument(&local); // no-crash
+
+    int useLocal = local; //expected-warning{{}}
+                          //expected-note@-1{{}}
+    (void)useLocal;
 }

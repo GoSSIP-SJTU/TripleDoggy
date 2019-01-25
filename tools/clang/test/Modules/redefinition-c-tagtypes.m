@@ -15,7 +15,7 @@ struct NS {
   int b;
 #else
   int c; // expected-note {{field has name 'c' here}}
-  // expected-error@redefinition-c-tagtypes.m:12 {{type 'struct NS' has incompatible definitions}}
+  // expected-warning@redefinition-c-tagtypes.m:12 {{type 'struct NS' has incompatible definitions}}
   // expected-note@Inputs/F.framework/PrivateHeaders/NS.h:3 {{field has name 'b' here}}
 #endif
 };
@@ -26,7 +26,7 @@ enum NSE {
   SND = 43,
 #else
   SND = 44, // expected-note {{enumerator 'SND' with value 44 here}}
-  // expected-error@redefinition-c-tagtypes.m:23 {{type 'enum NSE' has incompatible definitions}}
+  // expected-warning@redefinition-c-tagtypes.m:23 {{type 'enum NSE' has incompatible definitions}}
   // expected-note@Inputs/F.framework/PrivateHeaders/NS.h:8 {{enumerator 'SND' with value 43 here}}
 #endif
   TRD = 55
@@ -42,7 +42,7 @@ typedef NS_ENUM(int, NSMyEnum) {
   MinXOther = MinX,
 #else
   MinXOther = TRD, // expected-note {{enumerator 'MinXOther' with value 55 here}}
-  // expected-error@redefinition-c-tagtypes.m:39 {{type 'enum NSMyEnum' has incompatible definitions}}
+  // expected-warning@redefinition-c-tagtypes.m:39 {{type 'enum NSMyEnum' has incompatible definitions}}
   // expected-note@Inputs/F.framework/PrivateHeaders/NS.h:18 {{enumerator 'MinXOther' with value 11 here}}
 #endif
 };

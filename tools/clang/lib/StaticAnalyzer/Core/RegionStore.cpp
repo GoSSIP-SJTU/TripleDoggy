@@ -333,7 +333,7 @@ private:
   /// To disable all small-struct-dependent behavior, set the option to "0".
   unsigned SmallStructLimit;
 
-  /// \brief A helper used to populate the work list with the given set of
+  /// A helper used to populate the work list with the given set of
   /// regions.
   void populateWorkList(invalidateRegionsWorker &W,
                         ArrayRef<SVal> Values,
@@ -473,7 +473,7 @@ public: // Part of public interface to class.
                                   const TypedRegion *R,
                                   SVal DefaultVal);
 
-  /// \brief Create a new store with the specified binding removed.
+  /// Create a new store with the specified binding removed.
   /// \param ST the original store, that is the basis for the new store.
   /// \param L the location whose binding should be removed.
   StoreRef killBinding(Store ST, Loc L) override;
@@ -491,7 +491,7 @@ public: // Part of public interface to class.
 
   bool includedInBindings(Store store, const MemRegion *region) const override;
 
-  /// \brief Return the value bound to specified location in a given state.
+  /// Return the value bound to specified location in a given state.
   ///
   /// The high level logic for this method is this:
   /// getBinding (L)
@@ -1341,7 +1341,8 @@ RegionStoreManager::getSizeInElements(ProgramStateRef state,
   // If a variable is reinterpreted as a type that doesn't fit into a larger
   // type evenly, round it down.
   // This is a signed value, since it's used in arithmetic with signed indices.
-  return svalBuilder.makeIntVal(RegionSize / EleSize, false);
+  return svalBuilder.makeIntVal(RegionSize / EleSize,
+                                svalBuilder.getArrayIndexType());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1638,9 +1639,18 @@ SVal RegionStoreManager::getBindingForElement(RegionBindingsConstRef B,
           // The array index has to be known.
           if (auto CI = R->getIndex().getAs<nonloc::ConcreteInt>()) {
             int64_t i = CI->getValue().getSExtValue();
-            // Return unknown value if index is out of bounds.
-            if (i < 0 || i >= InitList->getNumInits())
-              return UnknownVal();
+            // If it is known that the index is out of bounds, we can return
+            // an undefined value.
+            if (i < 0)
+              return UndefinedVal();
+
+            if (auto CAT = Ctx.getAsConstantArrayType(VD->getType()))
+              if (CAT->getSize().sle(i))
+                return UndefinedVal();
+
+            // If there is a list, but no init, it must be zero.
+            if (i >= InitList->getNumInits())
+              return svalBuilder.makeZeroVal(R->getElementType());
 
             if (const Expr *ElemInit = InitList->getInit(i))
               if (Optional<SVal> V = svalBuilder.getConstantVal(ElemInit))
@@ -1711,13 +1721,19 @@ SVal RegionStoreManager::getBindingForField(RegionBindingsConstRef B,
   if (const auto *VR = dyn_cast<VarRegion>(superR)) {
     const VarDecl *VD = VR->getDecl();
     QualType RecordVarTy = VD->getType();
+    unsigned Index = FD->getFieldIndex();
     // Either the record variable or the field has to be const qualified.
     if (RecordVarTy.isConstQualified() || Ty.isConstQualified())
       if (const Expr *Init = VD->getInit())
-        if (const auto *InitList = dyn_cast<InitListExpr>(Init))
-          if (const Expr *FieldInit = InitList->getInit(FD->getFieldIndex()))
-            if (Optional<SVal> V = svalBuilder.getConstantVal(FieldInit))
-              return *V;
+        if (const auto *InitList = dyn_cast<InitListExpr>(Init)) {
+          if (Index < InitList->getNumInits()) {
+            if (const Expr *FieldInit = InitList->getInit(Index))
+              if (Optional<SVal> V = svalBuilder.getConstantVal(FieldInit))
+                return *V;
+          } else {
+            return svalBuilder.makeZeroVal(Ty);
+          }
+        }
   }
 
   return getBindingForFieldOrElementCommon(B, R, Ty);

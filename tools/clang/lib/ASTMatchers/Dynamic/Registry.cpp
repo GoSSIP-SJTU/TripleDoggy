@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 //
 /// \file
-/// \brief Registry map populated at static initialization time.
+/// Registry map populated at static initialization time.
 //
 //===----------------------------------------------------------------------===//
 
@@ -90,7 +90,7 @@ void RegistryMaps::registerMatcher(
     REGISTER_MATCHER_OVERLOAD(name);                                           \
   } while (false)
 
-/// \brief Generate a registry map with all the known matchers.
+/// Generate a registry map with all the known matchers.
 RegistryMaps::RegistryMaps() {
   // TODO: Here is the list of the missing matchers, grouped by reason.
   //
@@ -134,8 +134,10 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(atomicExpr);
   REGISTER_MATCHER(atomicType);
   REGISTER_MATCHER(autoType);
+  REGISTER_MATCHER(autoreleasePoolStmt)
   REGISTER_MATCHER(binaryOperator);
   REGISTER_MATCHER(binaryConditionalOperator);
+  REGISTER_MATCHER(blockDecl);
   REGISTER_MATCHER(blockPointerType);
   REGISTER_MATCHER(booleanType);
   REGISTER_MATCHER(breakStmt);
@@ -186,6 +188,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(decayedType);
   REGISTER_MATCHER(decl);
   REGISTER_MATCHER(declaratorDecl);
+  REGISTER_MATCHER(decltypeType);
   REGISTER_MATCHER(declCountIs);
   REGISTER_MATCHER(declRefExpr);
   REGISTER_MATCHER(declStmt);
@@ -281,6 +284,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(hasParent);
   REGISTER_MATCHER(hasQualifier);
   REGISTER_MATCHER(hasRangeInit);
+  REGISTER_MATCHER(hasReceiver);
   REGISTER_MATCHER(hasReceiverType);
   REGISTER_MATCHER(hasReplacementType);
   REGISTER_MATCHER(hasReturnValue);
@@ -347,6 +351,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(isImplicit);
   REGISTER_MATCHER(isExpansionInFileMatching);
   REGISTER_MATCHER(isExpansionInMainFile);
+  REGISTER_MATCHER(isInstanceMessage);
   REGISTER_MATCHER(isInstantiated);
   REGISTER_MATCHER(isExpansionInSystemHeader);
   REGISTER_MATCHER(isInteger);
@@ -354,6 +359,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(isInTemplateInstantiation);
   REGISTER_MATCHER(isLambda);
   REGISTER_MATCHER(isListInitialization);
+  REGISTER_MATCHER(isMain);
   REGISTER_MATCHER(isMemberInitializer);
   REGISTER_MATCHER(isMoveAssignmentOperator);
   REGISTER_MATCHER(isMoveConstructor);
@@ -404,6 +410,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(objcImplementationDecl);
   REGISTER_MATCHER(objcInterfaceDecl);
   REGISTER_MATCHER(objcIvarDecl);
+  REGISTER_MATCHER(objcIvarRefExpr);
   REGISTER_MATCHER(objcMessageExpr);
   REGISTER_MATCHER(objcMethodDecl);
   REGISTER_MATCHER(objcObjectPointerType);

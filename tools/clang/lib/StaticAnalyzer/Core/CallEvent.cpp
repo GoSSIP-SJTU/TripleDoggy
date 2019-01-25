@@ -27,6 +27,7 @@
 #include "clang/AST/Type.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Analysis/CFG.h"
+#include "clang/Analysis/CFGStmtMap.h"
 #include "clang/Analysis/ProgramPoint.h"
 #include "clang/CrossTU/CrossTranslationUnit.h"
 #include "clang/Basic/IdentifierTable.h"
@@ -166,7 +167,69 @@ bool CallEvent::isGlobalCFunction(StringRef FunctionName) const {
   return CheckerContext::isCLibraryFunction(FD, FunctionName);
 }
 
-/// \brief Returns true if a type is a pointer-to-const or reference-to-const
+AnalysisDeclContext *CallEvent::getCalleeAnalysisDeclContext() const {
+  const Decl *D = getDecl();
+
+  // If the callee is completely unknown, we cannot construct the stack frame.
+  if (!D)
+    return nullptr;
+
+  // FIXME: Skip virtual functions for now. There's no easy procedure to foresee
+  // the exact decl that should be used, especially when it's not a definition.
+  if (const Decl *RD = getRuntimeDefinition().getDecl())
+    if (RD != D)
+      return nullptr;
+
+  return LCtx->getAnalysisDeclContext()->getManager()->getContext(D);
+}
+
+const StackFrameContext *CallEvent::getCalleeStackFrame() const {
+  AnalysisDeclContext *ADC = getCalleeAnalysisDeclContext();
+  if (!ADC)
+    return nullptr;
+
+  const Expr *E = getOriginExpr();
+  if (!E)
+    return nullptr;
+
+  // Recover CFG block via reverse lookup.
+  // TODO: If we were to keep CFG element information as part of the CallEvent
+  // instead of doing this reverse lookup, we would be able to build the stack
+  // frame for non-expression-based calls, and also we wouldn't need the reverse
+  // lookup.
+  CFGStmtMap *Map = LCtx->getAnalysisDeclContext()->getCFGStmtMap();
+  const CFGBlock *B = Map->getBlock(E);
+  assert(B);
+
+  // Also recover CFG index by scanning the CFG block.
+  unsigned Idx = 0, Sz = B->size();
+  for (; Idx < Sz; ++Idx)
+    if (auto StmtElem = (*B)[Idx].getAs<CFGStmt>())
+      if (StmtElem->getStmt() == E)
+        break;
+  assert(Idx < Sz);
+
+  return ADC->getManager()->getStackFrame(ADC, LCtx, E, B, Idx);
+}
+
+const VarRegion *CallEvent::getParameterLocation(unsigned Index) const {
+  const StackFrameContext *SFC = getCalleeStackFrame();
+  // We cannot construct a VarRegion without a stack frame.
+  if (!SFC)
+    return nullptr;
+
+  const ParmVarDecl *PVD = parameters()[Index];
+  const VarRegion *VR =
+      State->getStateManager().getRegionManager().getVarRegion(PVD, SFC);
+
+  // This sanity check would fail if our parameter declaration doesn't
+  // correspond to the stack frame's function declaration.
+  assert(VR->getStackFrame() == SFC);
+
+  return VR;
+}
+
+/// Returns true if a type is a pointer-to-const or reference-to-const
 /// with no further indirection.
 static bool isPointerToConst(QualType Ty) {
   QualType PointeeTy = Ty->getPointeeType();
@@ -399,10 +462,10 @@ RuntimeDefinition AnyFunctionCall::getRuntimeDefinition() const {
     getManager()->getContext(FD);
   bool IsAutosynthesized;
   Stmt* Body = AD->getBody(IsAutosynthesized);
-  DEBUG({
-      if (IsAutosynthesized)
-        llvm::dbgs() << "Using autosynthesized body for " << FD->getName()
-                     << "\n";
+  LLVM_DEBUG({
+    if (IsAutosynthesized)
+      llvm::dbgs() << "Using autosynthesized body for " << FD->getName()
+                   << "\n";
   });
   if (Body) {
     const Decl* Decl = AD->getDecl();
@@ -419,7 +482,8 @@ RuntimeDefinition AnyFunctionCall::getRuntimeDefinition() const {
   cross_tu::CrossTranslationUnitContext &CTUCtx =
       *Engine->getCrossTranslationUnitContext();
   llvm::Expected<const FunctionDecl *> CTUDeclOrError =
-      CTUCtx.getCrossTUDefinition(FD, Opts.getCTUDir(), Opts.getCTUIndexName());
+      CTUCtx.getCrossTUDefinition(FD, Opts.getCTUDir(), Opts.getCTUIndexName(),
+                                  Opts.AnalyzerDisplayCtuProgress);
 
   if (!CTUDeclOrError) {
     handleAllErrors(CTUDeclOrError.takeError(),
@@ -534,9 +598,14 @@ void CXXInstanceCall::getExtraInvalidatedValues(
     // Get the record decl for the class of 'This'. D->getParent() may return a
     // base class decl, rather than the class of the instance which needs to be
     // checked for mutable fields.
+    // TODO: We might as well look at the dynamic type of the object.
     const Expr *Ex = getCXXThisExpr()->ignoreParenBaseCasts();
-    const CXXRecordDecl *ParentRecord = Ex->getType()->getAsCXXRecordDecl();
-    if (!ParentRecord || ParentRecord->hasMutableFields())
+    QualType T = Ex->getType();
+    if (T->isPointerType()) // Arrow or implicit-this syntax?
+      T = T->getPointeeType();
+    const CXXRecordDecl *ParentRecord = T->getAsCXXRecordDecl();
+    assert(ParentRecord);
+    if (ParentRecord->hasMutableFields())
       return;
     // Preserve CXXThis.
     const MemRegion *ThisRegion = ThisVal.getAsRegion();
@@ -1216,7 +1285,7 @@ CallEventRef<>
 CallEventManager::getCaller(const StackFrameContext *CalleeCtx,
                             ProgramStateRef State) {
   const LocationContext *ParentCtx = CalleeCtx->getParent();
-  const LocationContext *CallerCtx = ParentCtx->getCurrentStackFrame();
+  const LocationContext *CallerCtx = ParentCtx->getStackFrame();
   assert(CallerCtx && "This should not be used for top-level stack frames");
 
   const Stmt *CallSite = CalleeCtx->getCallSite();

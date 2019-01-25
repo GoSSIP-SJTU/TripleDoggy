@@ -175,7 +175,7 @@ bool darwin::Linker::NeedsTempPath(const InputInfoList &Inputs) const {
   return false;
 }
 
-/// \brief Pass -no_deduplicate to ld64 under certain conditions:
+/// Pass -no_deduplicate to ld64 under certain conditions:
 ///
 /// - Either -O0 or -O1 is explicitly specified
 /// - No -O option is specified *and* this is a compile+link (implicit -O0)
@@ -409,7 +409,7 @@ void darwin::Linker::AddLinkArgs(Compilation &C, const ArgList &Args,
   Args.AddLastArg(CmdArgs, options::OPT_Mach);
 }
 
-/// \brief Determine whether we are linking the ObjC runtime.
+/// Determine whether we are linking the ObjC runtime.
 static bool isObjCRuntimeLinked(const ArgList &Args) {
   if (isObjCAutoRefCount(Args)) {
     Args.ClaimAllArgs(options::OPT_fobjc_link_runtime);
@@ -476,6 +476,18 @@ void darwin::Linker::ConstructJob(Compilation &C, const JobAction &JA,
             std::string("-lto-pass-remarks-hotness-threshold=") + A->getValue();
         CmdArgs.push_back(Args.MakeArgString(Opt));
       }
+    }
+  }
+
+  // Propagate the -moutline flag to the linker in LTO.
+  if (Args.hasFlag(options::OPT_moutline, options::OPT_mno_outline, false)) {
+    if (getMachOToolChain().getMachOArchName(Args) == "arm64") {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-enable-machine-outliner");
+
+      // Outline from linkonceodr functions by default in LTO.
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-enable-linkonceodr-outlining");
     }
   }
 
@@ -1019,7 +1031,6 @@ void Darwin::addProfileRTLibs(const ArgList &Args,
   // runtime, automatically export symbols necessary to implement some of the
   // runtime's functionality.
   if (hasExportSymbolDirective(Args)) {
-    addExportedSymbol(CmdArgs, "_VPMergeHook");
     addExportedSymbol(CmdArgs, "___llvm_profile_filename");
     addExportedSymbol(CmdArgs, "___llvm_profile_raw_version");
     addExportedSymbol(CmdArgs, "_lprofCurFilename");
@@ -1473,10 +1484,16 @@ Optional<DarwinPlatform> inferDeploymentTargetFromSDK(DerivedArgList &Args) {
 std::string getOSVersion(llvm::Triple::OSType OS, const llvm::Triple &Triple,
                          const Driver &TheDriver) {
   unsigned Major, Minor, Micro;
+  llvm::Triple SystemTriple(llvm::sys::getProcessTriple());
   switch (OS) {
   case llvm::Triple::Darwin:
   case llvm::Triple::MacOSX:
-    if (!Triple.getMacOSXVersion(Major, Minor, Micro))
+    // If there is no version specified on triple, and both host and target are
+    // macos, use the host triple to infer OS version.
+    if (Triple.isMacOSX() && SystemTriple.isMacOSX() &&
+        !Triple.getOSMajorVersion())
+      SystemTriple.getMacOSXVersion(Major, Minor, Micro);
+    else if (!Triple.getMacOSXVersion(Major, Minor, Micro))
       TheDriver.Diag(diag::err_drv_invalid_darwin_version)
           << Triple.getOSName();
     break;
@@ -2018,7 +2035,11 @@ bool Darwin::isAlignedAllocationUnavailable() const {
 void Darwin::addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                                    llvm::opt::ArgStringList &CC1Args,
                                    Action::OffloadKind DeviceOffloadKind) const {
-  if (isAlignedAllocationUnavailable())
+  // Pass "-faligned-alloc-unavailable" only when the user hasn't manually
+  // enabled or disabled aligned allocations.
+  if (!DriverArgs.hasArgNoClaim(options::OPT_faligned_allocation,
+                                options::OPT_fno_aligned_allocation) &&
+      isAlignedAllocationUnavailable())
     CC1Args.push_back("-faligned-alloc-unavailable");
 }
 
