@@ -33,7 +33,7 @@ cd clang
 git clone https://github.com/GoSSIP-SJTU/TripleDoggy.git ./llvm
 mkdir build
 cd build
-cmake -G -DCMAKE_BUILD_TYPE=Release "Unix Makefiles" ../llvm
+cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release ../llvm
 make
 cd ..
 ```
