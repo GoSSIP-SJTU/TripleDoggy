@@ -209,6 +209,6 @@ integeroverflow vulnerability is more complicated, the main reasons are:
 
 we use taint analysis to implements ours checker:
 
-1. at the begining of top frame function, we mark all the input as the source of taint analysis.
+1. at the beginning of top frame function, we mark all the input as the source of taint analysis.
 2. when the symbolic execution meets a mathematic operation, it checks whether the l-value or r-value is tainted. if so, record the result value and the contion.
 3. when it meets a array index operation or memory allocate function, it chceks whether its integer arguments are in the set we recorded. if so, we check to see if the condition can be satisified again, if satisfied, we report a warning.
